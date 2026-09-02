@@ -3,9 +3,9 @@ import { basename, join, relative, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
     bannedHostMode,
+    contextMenuVerdict,
     controlClasses,
     glassViewPrimitives,
-    parkedContextMenuVerdict,
     rawGlassViewExemptions,
     swiftUiHostSites,
     swiftUiImporters,
@@ -36,13 +36,13 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 
 /**
- * Only `.ts` and `.tsx` above, so `LongPressCopyable.ios.tsx.native` is out of
- * every scan by construction. Metro and tsc do not see it either, which is
- * what "parked" means.
+ * Only `.ts` and `.tsx` above, which is what let a parked `.tsx.native` copy
+ * sit beside a live file without Metro, tsc, or any scan here seeing it. There
+ * is none left: DROVE-154 shipped the one that existed and deleted it.
  *
- * The policy module and this file are excluded too: both quote the markers
- * being scanned for, and a rule that fails on its own statement of itself is
- * not a rule.
+ * The policy module and this file are excluded: both quote the markers being
+ * scanned for, and a rule that fails on its own statement of itself is not a
+ * rule.
  */
 const policyFiles = ['components/nativeControls.ts', 'components/nativeControls.test.ts'];
 const files = walk(sourcesRoot)
@@ -249,11 +249,16 @@ describe('the inventory stays answerable', () => {
         ]);
     });
 
-    it('keeps the parked context menu parked rather than deleted', () => {
-        // The fix is known and three lines (see the verdict in nativeControls),
-        // so the file is a head start rather than a wrong turn. If a later lane
-        // ships it, this flips with the file.
-        expect(parkedContextMenuVerdict).toBe('keep');
-        expect(() => statSync(join(__dirname, 'LongPressCopyable.ios.tsx.native'))).not.toThrow();
+    it('has shipped the context menu and kept no parked copy beside it', () => {
+        // The other half of the assertion that used to hold the parked file
+        // alive. It said "if a later lane ships it, this flips with the file",
+        // and DROVE-154 is that lane: the verdict is `shipped`, the `.native`
+        // copy is deleted, and the live file is the one `measured` host site.
+        // A second copy reappearing beside a shipping file is the failure this
+        // now guards, because that is how two iOS implementations drift apart.
+        expect(contextMenuVerdict).toBe('shipped');
+        expect(() => statSync(join(__dirname, 'LongPressCopyable.ios.tsx.native'))).toThrow();
+        const site = swiftUiHostSites.find((entry) => entry.source === 'components/LongPressCopyable.ios.tsx');
+        expect(site?.mode).toBe('measured');
     });
 });

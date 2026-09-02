@@ -55,6 +55,7 @@ vi.mock('@expo/ui/swift-ui', async () => {
         Button: component('ExpoButton'),
         ContextMenu,
         Host: component('ExpoHost'),
+        RNHostView: component('ExpoRNHostView'),
     };
 });
 
@@ -141,37 +142,103 @@ const MESSAGE = 'the exact text the pill used to copy';
 
 describe('LongPressCopyable on iOS', () => {
     /**
-     * iOS is parked on the anchored menu (see LongPressCopyable.ios.tsx).
+     * iOS is on the real UIKit context menu (DROVE-154, un-parked).
      *
-     * The SwiftUI ContextMenu anchored and lifted correctly, but a hosted
-     * SwiftUI view does not take its height from React Native children, so a
-     * long markdown body was measured short and the message rendered CLIPPED
-     * mid-sentence. Clay could not read the transcript. Reading it beats the
-     * menu being native, so this asserts the parked state ON PURPOSE, and it
-     * fails the moment the native path is wired back in without the height
-     * being solved.
+     * It was parked for a day on a `bare` Host: a plain RN child of a `Host`
+     * is wrapped in a `UIViewRepresentable` with no `sizeThatFits` and no
+     * bounds observer, so `matchContents` was never measuring the body at all
+     * and a long markdown message rendered CLIPPED mid-sentence. `RNHostView`
+     * KVOs the child's bounds into a SwiftUI frame, which closes the loop back
+     * to Yoga, and attaches the `RCTSurfaceTouchHandler` the bare child never
+     * got — the second, quieter failure, where every link and tool card inside
+     * a message was inert.
+     *
+     * Neither of those is observable from a unit test: both are UIKit. What is
+     * observable is the SHAPE that makes them work, so that is what these
+     * assert. The device re-test is owed on the ticket, not here.
      */
-    it('is on the anchored menu, not a hosted SwiftUI view, until the host reports a real height', () => {
-        const renderer = render(React.createElement(IosCopyable, {
+    function renderIos(style?: unknown): ReactTestRenderer {
+        return render(React.createElement(IosCopyable, {
             text: MESSAGE,
+            style,
             children: React.createElement('Bubble'),
-        }));
-        expect(renderer.root.findAllByType('ExpoHost' as any)).toHaveLength(0);
-        expect(renderer.root.findAllByType('ExpoContextMenuTrigger' as any)).toHaveLength(0);
-        // The content is still rendered in full, which is the whole point.
-        expect(renderer.root.findByType('Bubble' as any)).toBeDefined();
+        } as any));
+    }
+
+    it('wraps the trigger child in RNHostView, which is what measures it and gives it touches', () => {
+        const renderer = renderIos();
+        const trigger = renderer.root.findByType('ExpoContextMenuTrigger' as any);
+        const hosted = trigger.findAllByType('ExpoRNHostView' as any);
+        expect(hosted).toHaveLength(1);
+        expect(hosted[0].props.matchContents).toBe(true);
+        // Without this the host is `bare`, which is the mode Rule 3 bans.
+        expect(hosted[0].findAllByType('Bubble' as any)).toHaveLength(1);
+    });
+
+    it('puts exactly one child under the trigger, and one under RNHostView', () => {
+        // `RNHostViewProps.children` is a single `ReactElement`, and the native
+        // view frames the SwiftUI view to that child's bounds. Two siblings —
+        // a goal bubble and its "sent as goal" row — would measure the first
+        // and clip the second, so the wrapper View is load-bearing.
+        const renderer = renderIos();
+        const trigger = renderer.root.findByType('ExpoContextMenuTrigger' as any);
+        expect(React.Children.count(trigger.props.children)).toBe(1);
+        const hosted = renderer.root.findByType('ExpoRNHostView' as any);
+        expect(React.Children.count(hosted.props.children)).toBe(1);
+    });
+
+    it('uses no ContextMenu.Preview, so iOS lifts the pressed view itself', () => {
+        // A Preview would draw a SECOND, SwiftUI-only rendering of the message
+        // for the lift. Omitting it is what makes the lift show the real body.
+        expect(renderIos().root.findAllByType('ExpoContextMenuPreview' as any)).toHaveLength(0);
+    });
+
+    it('matches the host vertically only, and stretches it for a real width', () => {
+        // A bare `matchContents` matches horizontally too, which pins the
+        // host's style width from content whose width comes down from that
+        // same node: the loop collapses to zero.
+        const host = renderIos().root.findByType('ExpoHost' as any);
+        expect(host.props.matchContents).toEqual({ vertical: true });
+        expect(host.props.style).toMatchObject({ alignSelf: 'stretch' });
+    });
+
+    it('carries the caller style inside the host, which is where fill-versus-hug is decided now', () => {
+        // The `fill` prop is gone. The host stretches unconditionally and the
+        // bubble hugs its own content INSIDE it, so `style` is the only lever
+        // and it has to ride on the wrapper, not on the host.
+        const style = { alignSelf: 'flex-end' };
+        const hosted = renderIos(style).root.findByType('ExpoRNHostView' as any);
+        expect(hosted.findByType('View' as any).props.style).toBe(style);
+    });
+
+    it('raises the menu natively, with no drawn menu and no long-press gesture of ours', () => {
+        const renderer = renderIos();
+        expect(renderer.root.findAllByType('RNModal' as any)).toHaveLength(0);
+        expect(shared.longPressHandlers).toHaveLength(0);
+        expect(renderer.root.findByType('ExpoContextMenu' as any)).toBeDefined();
+    });
+
+    function menuButton(renderer: ReactTestRenderer, label: string): any {
+        return renderer.root.findAllByType('ExpoButton' as any)
+            .find((button: any) => button.props.label === label);
+    }
+
+    it('lists Copy first and Select Text second, as the drawn menu does', () => {
+        const labels = renderIos().root.findAllByType('ExpoButton' as any)
+            .map((button: any) => button.props.label);
+        expect(labels).toEqual(['Copy', 'Select Text']);
     });
 
     it('still copies the same text the pill copied', async () => {
-        const renderer = render(React.createElement(IosCopyable, {
-            text: MESSAGE,
-            children: React.createElement('Bubble'),
-        }));
-        act(() => shared.longPressHandlers[0]());
-        const copyRow = renderer.root.findAllByType('Pressable' as any)
-            .find((row: any) => row.props.accessibilityLabel === 'Copy');
-        await act(async () => { await copyRow.props.onPress(); });
+        const renderer = renderIos();
+        await act(async () => { await menuButton(renderer, 'Copy').props.onPress(); });
         expect(shared.setStringAsync).toHaveBeenCalledWith(MESSAGE);
+    });
+
+    it('hands the reader exactly the text Copy would have put on the clipboard', () => {
+        const renderer = renderIos();
+        act(() => menuButton(renderer, 'Select Text').props.onPress());
+        expect(shared.push).toHaveBeenCalledWith(`/text-selection?textId=temp:${MESSAGE.length}`);
     });
 });
 

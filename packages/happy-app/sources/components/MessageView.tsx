@@ -410,7 +410,7 @@ function AgentTextBlock(props: {
   return (
     <View style={styles.agentMessageContainer}>
       {copyText !== null ? (
-        <LongPressCopyable fill style={styles.agentCopyTarget} text={copyText}>
+        <LongPressCopyable style={styles.agentCopyTarget} text={copyText}>
           {body}
         </LongPressCopyable>
       ) : body}

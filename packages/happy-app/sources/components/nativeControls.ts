@@ -96,16 +96,15 @@
  *
  *   bare      `<Host matchContents>` straight around RN children. THE TRAP,
  *             and the reason DROVE-154 clipped long messages mid-sentence.
- *             Never ship this. Both sites in the tree are casualties: one
- *             parked, one never wired up.
+ *             Never ship this. One site left in the tree, never wired up.
  *
  *   measured  `<Host matchContents={{ vertical: true }}>` with the RN children
  *             inside `<RNHostView matchContents>`. `RNHostView` is the one
  *             component in the package that KVOs the RN child's `bounds` and
  *             applies it as a SwiftUI `.frame`, which is what closes the loop
  *             back to `setStyleSize` and Yoga. It also attaches the touch
- *             handler. Untried in this app; it is the fix for the parked file
- *             below.
+ *             handler. Shipping in `LongPressCopyable.ios.tsx`, which is the
+ *             file `bare` clipped and this mode un-parked (DROVE-154).
  *
  * Two constraints on `measured`, both load-bearing. Match only the VERTICAL
  * axis: horizontal `matchContents` pins the host's style width from its
@@ -215,9 +214,11 @@
  * labels, which is `UISegmentedControl`, and DROVE-330 uses exactly that for
  * the tabs inside a sheet (`SheetTabs.ios.tsx`).
  *
- * One cost is unmeasured and should be measured before anything hosts SwiftUI
- * per row: a `Host` on every message in the transcript is the first place
- * hosting overhead would show up as scroll jank.
+ * One cost is still unmeasured, and DROVE-154 shipped into it rather than
+ * around it: a `Host` plus an `RNHostView` on every message in the transcript
+ * is two hosting layers per row, and the transcript is the one screen where
+ * that would show up as scroll jank. Nothing here has been profiled. Anything
+ * that hosts SwiftUI per row again should profile it first.
  */
 
 /** How a `Host` from `@expo/ui/swift-ui` is mounted. See Rule 3. */
@@ -235,8 +236,9 @@ export interface SwiftUiHostSite {
  * Every `<Host>` in the tree. The test fails on a file that mounts one and is
  * not here, and on an entry whose file no longer mounts one.
  *
- * The one `bare` entry is unimported, which is the cheapest statement of Rule
- * 3 available: the mode has never once shipped.
+ * The one `bare` entry is still unimported, which is the cheapest statement of
+ * Rule 3 available: the mode has never once reached a screen. The file it used
+ * to describe twice over now sits above it as the first `measured` site.
  */
 export const swiftUiHostSites: readonly SwiftUiHostSite[] = [
     {
@@ -254,9 +256,17 @@ export const swiftUiHostSites: readonly SwiftUiHostSite[] = [
         mode: 'fixed',
     },
     {
+        // The first `measured` site, and the one DROVE-154 was parked on. A
+        // `Host` matched vertically only, stretched by RN style, with the
+        // message body inside a single `RNHostView matchContents` under
+        // `ContextMenu.Trigger`.
+        source: 'components/LongPressCopyable.ios.tsx',
+        mode: 'measured',
+    },
+    {
         source: 'components/SessionActionsNativeMenu.ios.tsx',
         mode: 'bare',
-        reason: 'Written by an earlier lane and never imported by anything. The DROVE-154 failure is waiting in it twice over: a session row taller than the host measures would clip, and every tap target inside the row is inert for want of a touch handler. Give it `RNHostView` or make it an overlay before importing it.',
+        reason: 'Written by an earlier lane and never imported by anything. The failure DROVE-154 hit is waiting in it twice over: a session row taller than the host measures would clip, and every tap target inside the row is inert for want of a touch handler. Give it `RNHostView` — the `measured` shape is now shipping one entry up — or make it an overlay before importing it.',
     },
 ];
 
@@ -307,6 +317,7 @@ export interface SwiftUiImporter {
 }
 
 export const swiftUiImporters: readonly SwiftUiImporter[] = [
+    { source: 'components/LongPressCopyable.ios.tsx', use: 'context-menu' },
     { source: 'components/NativeSettingsMenu.ios.tsx', use: 'menu' },
     { source: 'components/NativeOptionsPicker.ios.tsx', use: 'menu' },
     { source: 'components/SessionActionsNativeMenu.ios.tsx', use: 'context-menu' },
@@ -398,9 +409,9 @@ export const controlClasses: readonly ControlClass[] = [
     },
     {
         name: 'message long press',
-        drawnBy: 'custom',
+        drawnBy: 'expo-ui',
         source: 'components/LongPressCopyable.tsx',
-        verdict: 'Would gain the anchored menu, the lift, the haptic and system dismissal. Parked on the `bare` host clipping long bodies; `RNHostView` is the fix and it is three lines. See the verdict below.',
+        verdict: 'SwiftUI ContextMenu on iOS, in the `measured` host of Rule 3: the anchor at the finger, the lift, the haptic and system dismissal are the platform\'s. Android has no context-menu primitive (Rule 8) and keeps the hand-drawn anchored menu, so this class is expo-ui on one platform only. What it costs is two hosting layers per transcript row, still unprofiled. See the verdict below.',
     },
     {
         name: 'sheets',
@@ -423,62 +434,74 @@ export const controlClasses: readonly ControlClass[] = [
 ];
 
 /**
- * VERDICT ON `LongPressCopyable.ios.tsx.native` (DROVE-154, asked on DROVE-134).
+ * VERDICT ON THE iOS CONTEXT MENU (DROVE-154, asked on DROVE-134).
  *
- * KEEP IT. The height problem is solvable, the fix is three lines, and the
- * mechanism is already compiled into the build on Clay's phone.
+ * SHIPPED. `LongPressCopyable.ios.tsx` is the real UIKit context menu again,
+ * and `LongPressCopyable.ios.tsx.native` — the copy this file told an earlier
+ * lane to KEEP while the mechanism was unproven — is deleted, because the live
+ * file now IS it plus the three lines it was waiting on.
  *
- * DROVE-154 parked the file believing it was blocked on the host reporting the
- * body's real height. It is not blocked; it is missing a component. Bare RN
- * children in a `Host` contribute nothing to `matchContents` (Rule 3), but
- * `RNHostView` from `@expo/ui/swift-ui` exists for exactly this: it KVOs the
+ * What was actually wrong. DROVE-154 parked the file believing it was blocked
+ * on the host reporting the body's real height. It was not blocked; it was
+ * missing a component. Bare RN children in a `Host` contribute nothing to
+ * `matchContents` (Rule 3), so `matchContents` was not measuring the body
+ * short, it was measuring a SwiftUI tree the body contributed nothing to, and
+ * a long markdown message rendered clipped mid-sentence. `RNHostView` KVOs the
  * RN child's `bounds`, which is what RN's `updateLayoutMetrics` writes, and
- * applies it as a SwiftUI `.frame`. That closes the loop the parked file is
- * missing, all the way back to `setStyleSize` and a dirtied Yoga node. Every
- * hop is reactive, so an async markdown reflow propagates rather than
- * freezing a stale height.
+ * applies it as a SwiftUI `.frame`. That closes the loop all the way back to
+ * `setStyleSize` and a dirtied Yoga node. Every hop is reactive, so an async
+ * markdown reflow propagates rather than freezing a stale height.
  *
- * The change, against the file as parked:
+ * The shape that shipped, against the file as parked:
  *
  *   -  <Host matchContents={props.fill ? { vertical: true } : true} ...>
- *   +  <Host matchContents={{ vertical: true }} style={styles.fill}>
+ *   +  <Host matchContents={{ vertical: true }} style={styles.host}>
  *        <ContextMenu>
  *          <ContextMenu.Items>...</ContextMenu.Items>
  *   -      <ContextMenu.Trigger>{props.children}</ContextMenu.Trigger>
  *   +      <ContextMenu.Trigger>
- *   +        <RNHostView matchContents>{props.children}</RNHostView>
+ *   +        <RNHostView matchContents>
+ *   +          <View style={props.style}>{props.children}</View>
+ *   +        </RNHostView>
  *   +      </ContextMenu.Trigger>
  *
- * `matchContents` goes to vertical-only on BOTH branches, not just the filling
- * one. `true` matches horizontally as well, which pins the host's style width
- * from content whose width comes down from that same node, and that loop
- * collapses to zero. The user-bubble branch wants `alignSelf: 'stretch'` and a
- * bubble that hugs its own content inside the host, not a host that hugs the
- * bubble.
+ * `matchContents` is vertical-only on every message, not just the filling one.
+ * `true` matches horizontally as well, which pins the host's style width from
+ * content whose width comes down from that same node, and that loop collapses
+ * to zero. The host stretches unconditionally and the bubble hugs its own
+ * content INSIDE it, which is why the `fill` prop is gone: the caller's
+ * `style` rides on the wrapper inside the host and is the only place the
+ * fill-versus-hug decision is made now.
+ *
+ * The single `View` in that wrapper is load-bearing twice. `RNHostViewProps`
+ * types `children` as one `ReactElement`, and `RNHostView` frames the SwiftUI
+ * view to that child's bounds — so a caller passing two siblings (a goal
+ * bubble and its "sent as goal" row) would measure the bubble and clip the
+ * row.
  *
  * `RNHostView` also fixes a second defect nobody reported, because a clipped
  * message is louder than a dead one: a bare RN child of a `Host` gets no
- * `RCTSurfaceTouchHandler`, so every tap target inside a message under the
- * parked file was inert. `RNHostView` attaches one. Anyone re-testing the
- * parked file must check that a link and a tool card inside a message still
- * respond, not only that the body is not clipped.
+ * `RCTSurfaceTouchHandler`, so every link and tool card inside a message under
+ * the parked file was inert. `RNHostView` attaches one.
  *
  * OTA. `RNHostView.swift` is registered in `ExpoUIModule.swift` in the
  * installed `@expo/ui` 55.0.5, which is the version compiled into TestFlight
- * build 12, so this needs no new build.
+ * build 12, so this needed no new build.
  *
- * TWO THINGS TO VERIFY ON DEVICE BEFORE SHIPPING IT, both unmeasured:
+ * STILL OWED ON DEVICE, both unmeasured and neither one a unit test can reach:
  *
- *   1. Scroll cost. A `Host` plus an `RNHostView` per transcript row is two
- *      hosting layers on every message, and the transcript is the one screen
- *      where that would show as jank. Nothing here has ever been profiled.
- *   2. The height under reflow, not at rest. The clip DROVE-154 saw was on a
- *      long markdown body; test with code blocks and images, which lay out
- *      late, and not only with a long paragraph.
+ *   1. The height under reflow, not at rest. The clip was on a long markdown
+ *      body; re-test with code blocks and images, which lay out late, and not
+ *      only with a long paragraph.
+ *   2. Touch. A link and a tool card inside a message must respond to a tap.
+ *      That is the failure the parked file had and nobody saw.
  *
- * If either fails, the fallback is `overlay` (Rule 3): the menu at the finger
- * with no measurement anywhere, at the cost of the lift preview. That is a
- * product call for Clay rather than an engineering one. Deleting the file is
- * the wrong move either way now that the fix is known and written down.
+ *   And one cost to watch rather than assert: scroll. A `Host` plus an
+ *   `RNHostView` per transcript row is two hosting layers on every message,
+ *   never profiled.
+ *
+ * If the height or the touch check fails, the fallback is `overlay` (Rule 3):
+ * the menu at the finger with no measurement anywhere, at the cost of the lift
+ * preview. That is a product call for Clay rather than an engineering one.
  */
-export const parkedContextMenuVerdict = 'keep' as const;
+export const contextMenuVerdict = 'shipped' as const;
