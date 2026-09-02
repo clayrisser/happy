@@ -91,7 +91,11 @@ export const InlineImage = React.memo<InlineImageProps>(({
                     />
                 </Pressable>
             ) : null}
-            {uri ? <ImageViewer uri={uri} visible={viewerOpen} onClose={closeViewer} /> : null}
+            {/* Kept mounted while open, so a source that goes away mid-view
+                says so rather than turning the screen black (DROVE-366). */}
+            {viewerOpen || uri ? (
+                <ImageViewer uri={uri} visible={viewerOpen} onClose={closeViewer} />
+            ) : null}
         </View>
     );
 });

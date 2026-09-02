@@ -6,9 +6,19 @@
  * A Modal rather than a route on purpose: the transcript underneath is never
  * unmounted, so dismissing lands on the same scroll position instead of
  * rebuilding the list at the top.
+ *
+ * The stage is sized from the window in POINTS (DROVE-366). It used to be two
+ * nested views sharing one `flex: 1, alignItems: 'center'` style with the
+ * picture at `width: '100%'`, and that percentage measured against a parent
+ * whose own width `alignItems: 'center'` had left auto. Yoga answers zero to
+ * that circle, so the picture was laid out zero wide and the screen was the
+ * backdrop, the close control, and nothing else. Clay: "Why are images not
+ * showing when I click on this?"
+ *
+ * A viewer with no source says so rather than opening onto the same black.
  */
 import * as React from 'react';
-import { Modal, Platform, Pressable, View } from 'react-native';
+import { Modal, Platform, Pressable, Text, View, useWindowDimensions } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -16,8 +26,11 @@ import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-na
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet } from 'react-native-unistyles';
 
+import { imageViewerContent, imageViewerStage } from '@/utils/imageViewer';
+
 interface ImageViewerProps {
-    uri: string;
+    /** Missing when nothing on this phone can supply the bytes. */
+    uri: string | undefined;
     visible: boolean;
     onClose: () => void;
 }
@@ -28,6 +41,9 @@ const doubleTapScale = 2.5;
 
 export const ImageViewer = React.memo<ImageViewerProps>(({ uri, visible, onClose }) => {
     const insets = useSafeAreaInsets();
+    const window = useWindowDimensions();
+    const stage = imageViewerStage(window);
+    const content = imageViewerContent(uri);
     const scale = useSharedValue(1);
     const savedScale = useSharedValue(1);
     const offsetX = useSharedValue(0);
@@ -115,18 +131,28 @@ export const ImageViewer = React.memo<ImageViewerProps>(({ uri, visible, onClose
             {/* Gesture handlers do not inherit the app's root inside a Modal. */}
             <GestureHandlerRootView style={styles.root}>
                 <View style={styles.backdrop}>
-                    <GestureDetector gesture={gesture}>
-                        <Animated.View style={styles.stage}>
-                            <Animated.View style={[styles.stage, imageStyle]}>
-                                <Image
-                                    source={{ uri }}
-                                    style={styles.image}
-                                    contentFit="contain"
-                                    accessibilityIgnoresInvertColors
-                                />
-                            </Animated.View>
-                        </Animated.View>
-                    </GestureDetector>
+                    {content.kind === 'image' ? (
+                        // Nothing is drawn until the window has been measured,
+                        // because the only other size available is zero.
+                        stage ? (
+                            <GestureDetector gesture={gesture}>
+                                <Animated.View style={styles.stage}>
+                                    <Animated.View style={[stage, imageStyle]}>
+                                        <Image
+                                            source={{ uri: content.uri }}
+                                            style={stage}
+                                            contentFit="contain"
+                                            accessibilityIgnoresInvertColors
+                                        />
+                                    </Animated.View>
+                                </Animated.View>
+                            </GestureDetector>
+                        ) : null
+                    ) : (
+                        <View style={styles.stage}>
+                            <Text style={styles.empty}>{content.message}</Text>
+                        </View>
+                    )}
                     <Pressable
                         style={[styles.close, { top: insets.top + 12 }]}
                         onPress={onClose}
@@ -154,9 +180,9 @@ const styles = StyleSheet.create(() => ({
         alignItems: 'center',
         justifyContent: 'center',
     },
-    image: {
-        width: '100%',
-        height: '100%',
+    empty: {
+        color: 'rgba(255,255,255,0.75)',
+        fontSize: 15,
     },
     close: {
         position: 'absolute',
