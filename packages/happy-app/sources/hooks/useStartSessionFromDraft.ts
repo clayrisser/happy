@@ -180,13 +180,19 @@ export function useStartSessionFromDraft() {
                 effortLevel: rigCreation.defaultEffortForModel(rigCreation.defaultModelKey),
             }
             : resolveAgentDefaultConfig(defaultOverrides, agentType, machine.metadata?.happyCliVersion);
+        // The daemon machine's CLI is what will parse the mode; older CLIs
+        // drop the whole prompt on modes they do not know (e.g. `auto`).
+        const permissionOptions = rigCreation?.permissionModes ?? filterPermissionModesForCli(
+            getHardcodedPermissionModes(agentType, t),
+            machine.metadata?.happyCliVersion,
+        );
+        const modelOptions = rigCreation?.models ?? includeConfiguredModel(
+            agentType,
+            getHardcodedModelModes(agentType, t),
+            defaults.modelMode,
+        );
         const permission = resolveOption<{ key: string }>(
-            // The daemon machine's CLI is what will parse the mode; older CLIs
-            // drop the whole prompt on modes they do not know (e.g. `auto`).
-            rigCreation?.permissionModes ?? filterPermissionModesForCli(
-                getHardcodedPermissionModes(agentType, t),
-                machine.metadata?.happyCliVersion,
-            ),
+            permissionOptions,
             // The code default last: when the saved and configured modes were
             // both filtered out for an old CLI, land there rather than on
             // whichever mode happens to lead the list.
@@ -195,11 +201,7 @@ export function useStartSessionFromDraft() {
                 : [draft.permissionMode, defaults.permissionMode, rigCreation ? null : getCodeAgentDefaults(agentType, machine.metadata?.happyCliVersion).permissionMode],
         );
         const model = resolveOption<{ key: string }>(
-            rigCreation?.models ?? includeConfiguredModel(
-                agentType,
-                getHardcodedModelModes(agentType, t),
-                defaults.modelMode,
-            ),
+            modelOptions,
             agentChanged
                 ? [defaults.modelMode]
                 : [draft.modelMode, defaults.modelMode],
@@ -214,8 +216,32 @@ export function useStartSessionFromDraft() {
                 ? [effortDefault]
                 : [draft.effortLevel, effortDefault],
         );
-        if (!permission || !model) {
-            Modal.alert(t('common.error'), 'The selected agent configuration is unavailable');
+        // AN EMPTY CATALOG IS AN ANSWER, NOT A FAILURE (DROVE-358).
+        //
+        // `resolveOption` returns null only for an EMPTY list, and three
+        // harnesses ship one on purpose. Cursor's models are published by the
+        // SESSION, read off `cursor-agent --list-models`, because a hardcoded
+        // key goes stale and a stale key is a turn that dies at exec
+        // (DROVE-253); pi's are per MACHINE, whatever local runtime is being
+        // served (DROVE-295); OpenCode publishes neither modes nor models
+        // because its own TUI owns them (DROVE-56). A NEW session is the one
+        // moment there is no session to read any of that off, so the list is
+        // empty exactly here — and the old guard read that as a broken
+        // selection and refused to start Cursor at all.
+        //
+        // What an empty list actually means is "the harness picks for itself",
+        // which the spawn below already says as an absent `modelMode`. So it is
+        // read that way, and only Happy Agent is held to a catalog: its spawn
+        // is provider-qualified, so a machine that advertised nothing really
+        // cannot be started — and that gets NAMED rather than described
+        // (DROVE-337's rule: never the generic sentence).
+        if (rigCreation && (!model || !permission)) {
+            Modal.alert(
+                t('common.error'),
+                !model
+                    ? 'Happy Agent on this computer published no models, so there is nothing to start a session with. Update it on the machine and try again.'
+                    : 'Happy Agent on this computer published no operating modes, so there is nothing to start a session with. Update it on the machine and try again.',
+            );
             return false;
         }
 
@@ -245,8 +271,8 @@ export function useStartSessionFromDraft() {
             agent: agentType,
             directory: selectedPath,
             worktree: worktreeSelection,
-            modelKey: model.key,
-            permissionMode: permission.key,
+            modelKey: model?.key ?? null,
+            permissionMode: permission?.key ?? null,
             effort: effort?.key ?? null,
         }));
 
@@ -307,8 +333,8 @@ export function useStartSessionFromDraft() {
                             directory: spawnDirectory,
                             clientRequestId,
                             approvedNewDirectoryCreation,
-                            modelKey: model.key,
-                            permissionMode: permission.key,
+                            modelKey: model?.key,
+                            permissionMode: permission?.key,
                             effort: effort?.key,
                         }),
                     }
@@ -319,10 +345,12 @@ export function useStartSessionFromDraft() {
                         agent: agentType,
                         // Codex Default is a concrete ask-first policy, not an
                         // ambient absence of an override.
-                        permissionMode: agentType === 'codex' || permission.key !== 'default'
+                        permissionMode: permission && (agentType === 'codex' || permission.key !== 'default')
                             ? permission.key
                             : undefined,
-                        modelMode: model.key !== 'default' ? model.key : undefined,
+                        // Absent, not 'default': a harness with no published
+                        // catalog is left to pick its own model.
+                        modelMode: model && model.key !== 'default' ? model.key : undefined,
                         effortLevel: effort?.key,
                     };
                 let result = await machineSpawnNewSession(spawnOptions);
@@ -390,8 +418,8 @@ export function useStartSessionFromDraft() {
                 // defaults as null lets a later settings change rewrite an
                 // existing session's displayed and transmitted mode/model.
                 sessionSetAgentModes(sessionId, {
-                    permissionMode: permission.key,
-                    modelMode: model.key,
+                    permissionMode: permission?.key ?? null,
+                    modelMode: model?.key ?? null,
                     effortLevel: effort?.key ?? null,
                 });
             }

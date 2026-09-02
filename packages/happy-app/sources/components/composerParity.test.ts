@@ -27,10 +27,20 @@ import { describe, expect, it } from 'vitest';
 const sources = join(__dirname, '..');
 const read = (relative: string) => readFileSync(join(sources, relative), 'utf8');
 
-/** The two screens with a composer on them. */
+/**
+ * The three screens with a composer on them.
+ *
+ * The new-session screen was the THIRD implementation and this spec did not
+ * look at it, so DROVE-345 landed on two of the three and Clay photographed
+ * the one it missed (DROVE-358): a flat grey panel, a thin `+`, a lock and the
+ * word Cursor, a thin arrow, against the session composer's glass. Two screens
+ * agreeing is not "one composer"; it is the same drift one file along, which
+ * is why the list is the thing that had to change and not just the file.
+ */
 const screens = {
     'the session screen': 'components/AgentInput.tsx',
     'the home screen': 'components/HomeDock.tsx',
+    'the new-session screen': 'app/(app)/new/index.tsx',
 } as const;
 
 /**

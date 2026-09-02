@@ -100,17 +100,30 @@ vi.mock('@/components/modelModeOptions', () => ({
             ? modes.filter((mode) => mode.key !== 'auto')
             : modes
     ),
-    getHardcodedPermissionModes: () => [
-        { key: 'auto', name: 'Auto' },
-        { key: 'default', name: 'Default' },
-        { key: 'safe-yolo', name: 'Safe YOLO' },
-        { key: 'yolo', name: 'YOLO' },
-        { key: 'bypassPermissions', name: 'YOLO' },
-    ],
-    getHardcodedModelModes: () => [
-        { key: 'default', name: 'Default' },
-        { key: 'opus', name: 'Opus' },
-    ],
+    // Faithful to the real tables on the point that matters here: a harness
+    // that publishes no catalog gets an EMPTY list, not a shortened one.
+    // Cursor's models come off the session (DROVE-253), pi's off the machine
+    // (DROVE-295), and OpenCode publishes neither (DROVE-56).
+    getHardcodedPermissionModes: (flavor: string) => {
+        if (flavor === 'opencode') return [];
+        if (flavor === 'cursor') return [{ key: 'bypassPermissions', name: 'full access' }];
+        if (flavor === 'pi') return [{ key: 'default', name: 'brokered' }];
+        return [
+            { key: 'auto', name: 'Auto' },
+            { key: 'default', name: 'Default' },
+            { key: 'safe-yolo', name: 'Safe YOLO' },
+            { key: 'yolo', name: 'YOLO' },
+            { key: 'bypassPermissions', name: 'YOLO' },
+        ];
+    },
+    getHardcodedModelModes: (flavor: string) => (
+        flavor === 'cursor' || flavor === 'pi' || flavor === 'opencode'
+            ? []
+            : [
+                { key: 'default', name: 'Default' },
+                { key: 'opus', name: 'Opus' },
+            ]
+    ),
     getEffortLevelsForModel: () => [
         { key: 'medium', name: 'Medium' },
     ],
@@ -551,11 +564,83 @@ describe('useStartSessionFromDraft', () => {
         const { startSession } = useStartSessionFromDraft();
 
         await expect(startSession()).resolves.toBe(false);
+        // Named, not described. DROVE-337's rule: a refusal says which thing
+        // is missing and on whose machine, so the reader knows what to fix.
         expect(mocks.alert).toHaveBeenCalledWith(
             'common.error',
-            'The selected agent configuration is unavailable',
+            'Happy Agent on this computer published no operating modes, so there is nothing to start a session with. Update it on the machine and try again.',
         );
         expect(mocks.machineSpawnNewSession).not.toHaveBeenCalled();
+    });
+
+    it('names the missing catalog when a Rig machine publishes no models', async () => {
+        mocks.machines = [createRigMachine({ models: [] })];
+        mocks.draft = createDraft({ agentType: 'rig' });
+
+        const { startSession } = useStartSessionFromDraft();
+
+        await expect(startSession()).resolves.toBe(false);
+        expect(mocks.alert).toHaveBeenCalledWith(
+            'common.error',
+            'Happy Agent on this computer published no models, so there is nothing to start a session with. Update it on the machine and try again.',
+        );
+        expect(mocks.machineSpawnNewSession).not.toHaveBeenCalled();
+    });
+
+    /**
+     * A HARNESS THAT PUBLISHES NO MODELS STILL STARTS (DROVE-358).
+     *
+     * Clay photographed this on studio.234: machine, folder, No worktree,
+     * Cursor, "Test", send — and "The selected agent configuration is
+     * unavailable", while `drover cursor` ran fine in a terminal on the same
+     * box. Nothing was wrong with the machine or the account. The guard read
+     * Cursor's deliberately empty model table as a broken selection, so Cursor
+     * could not be started from this screen at all.
+     */
+    it('starts Cursor even though Cursor publishes no model list', async () => {
+        // Cursor is only offered on a machine whose daemon reported it
+        // (DROVE-57), which studio.234's does.
+        mocks.machines = [{
+            id: 'machine-1',
+            online: true,
+            metadata: {
+                homeDir: '/Users/dev',
+                cliAvailability: { claude: true, codex: true, cursor: true, detectedAt: 1 },
+            },
+        }];
+        mocks.draft = createDraft({ agentType: 'cursor' });
+
+        const { startSession } = useStartSessionFromDraft();
+
+        await expect(startSession()).resolves.toBe(true);
+        expect(mocks.alert).not.toHaveBeenCalled();
+        expect(mocks.machineSpawnNewSession).toHaveBeenCalledWith(expect.objectContaining({
+            agent: 'cursor',
+            // Absent, so the harness picks its own — which is what an empty
+            // catalog means, and what the session then publishes back.
+            modelMode: undefined,
+            permissionMode: 'bypassPermissions',
+        }));
+        expect(mocks.sessionSetAgentModes).toHaveBeenCalledWith('session-1', {
+            permissionMode: 'bypassPermissions',
+            modelMode: null,
+            effortLevel: 'medium',
+        });
+        expect(mocks.navigateToSession).toHaveBeenCalledWith('session-1');
+    });
+
+    it('starts OpenCode, which publishes neither modes nor models', async () => {
+        mocks.draft = createDraft({ agentType: 'opencode' });
+
+        const { startSession } = useStartSessionFromDraft();
+
+        await expect(startSession()).resolves.toBe(true);
+        expect(mocks.alert).not.toHaveBeenCalled();
+        expect(mocks.machineSpawnNewSession).toHaveBeenCalledWith(expect.objectContaining({
+            agent: 'opencode',
+            modelMode: undefined,
+            permissionMode: undefined,
+        }));
     });
 
     it('reuses the idempotency key when the user retries the same spawn', async () => {
