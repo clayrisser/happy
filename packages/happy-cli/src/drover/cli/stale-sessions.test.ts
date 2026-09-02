@@ -37,9 +37,20 @@ import {
     staleCodeMtime,
     staleServicePid,
     staleStartedAt,
+    deadRegistered,
+    renderDeadReport,
+    staleLedgerFile,
     staleTranscriptOf,
+    type LedgerRegistry,
     type Probe,
 } from './stale-sessions';
+import {
+    readLedger,
+    type ArchiveAnswer,
+    type ArchiveTransport,
+    type LedgerCrypto,
+    type ServerSession,
+} from './happyLedger';
 
 /**
  * A throwaway HAPPY_HOME_DIR, pinned above every import.
@@ -784,5 +795,313 @@ describe('drover stale-sessions — through the built entry, registering nothing
         } finally {
             rmSync(dir, { recursive: true, force: true });
         }
+    });
+});
+
+// --- the dead sessions the daemon still lists (DROVE-389) --------------------------
+//
+// A harness session the daemon registered stays 'running' on the phone until
+// something archives it, and when its process was killed nothing ever does.
+// The report names them; --archive retires them the way the Archive button
+// does. Everything here is against a ledger of this test's own and a registry
+// that answers from fixtures and records what was written.
+
+describe('drover stale-sessions — the dead sessions the daemon still lists', () => {
+    const NOW = Date.now();
+    const KEY = Buffer.alloc(32, 7).toString('base64');
+    const B = 'bbbbbbbb-0000-0000-0000-000000000000';
+    const C = 'cccccccc-0000-0000-0000-000000000000';
+    const L = 'llllllll-0000-0000-0000-000000000000';
+    const K = 'kkkkkkkk-0000-0000-0000-000000000000';
+    const DEAD_PID = 2 ** 22 - 1;
+    const DEAD_PID_2 = 2 ** 22 - 2;
+
+    const plainCrypto: LedgerCrypto = {
+        encrypt: (_key, _variant, data) => new Uint8Array(Buffer.from(JSON.stringify(data), 'utf8')),
+        decrypt: (_key, _variant, data) => JSON.parse(Buffer.from(data).toString('utf8')) as unknown,
+        encodeBase64: (b) => Buffer.from(b).toString('base64'),
+        decodeBase64: (s) => new Uint8Array(Buffer.from(s, 'base64')),
+    };
+    const blob = (data: unknown): string => plainCrypto.encodeBase64(plainCrypto.encrypt(new Uint8Array(), 'legacy', data));
+
+    const entry = (md: Record<string, unknown>, savedAt: number): Record<string, unknown> => ({
+        agentStateVersion: 0, encryptionKey: KEY, encryptionVariant: 'legacy', metadata: md, metadataVersion: 1, savedAt, seq: 0,
+    });
+    const LEDGER = {
+        sessions: {
+            [B]: entry({ path: '/Users/x/two', hostPid: DEAD_PID, startedBy: 'daemon', lifecycleState: 'running', name: 'fix the build', flavor: 'codex' }, NOW - 2000),
+            [C]: entry({ path: '/Users/x/three', hostPid: DEAD_PID_2, startedBy: 'terminal', lifecycleState: 'running', flavor: 'opencode' }, NOW - 1000),
+            [L]: entry({ path: '/Users/x/live', hostPid: process.pid, lifecycleState: 'running', name: 'still going', flavor: 'cursor' }, NOW - 500),
+            [K]: entry({ path: '/Users/x/claude', hostPid: DEAD_PID, lifecycleState: 'running', name: 'a claude that ended', flavor: 'claude' }, NOW - 400),
+        },
+    };
+
+    interface Fake extends LedgerRegistry {
+        listCalls: number;
+        updates: Array<{ sid: string; expectedVersion: number; metadata: unknown }>;
+        archived: string[];
+        closed: number;
+    }
+
+    /** A registry that lists from a fixture, answers updateMetadata from a script, and records every write. */
+    function fake(listed: ServerSession[] | Error, answers: ArchiveAnswer[] = [], transportError?: Error): Fake {
+        const f: Fake = {
+            listCalls: 0,
+            updates: [],
+            archived: [],
+            closed: 0,
+            async list() {
+                f.listCalls++;
+                if (listed instanceof Error) throw listed;
+                return listed;
+            },
+            async transport() {
+                if (transportError) throw transportError;
+                const t: ArchiveTransport = {
+                    async updateMetadata(sid, expectedVersion, metadata) {
+                        f.updates.push({ sid, expectedVersion, metadata: JSON.parse(Buffer.from(metadata, 'base64').toString('utf8')) });
+                        return answers.shift() ?? { result: 'success' };
+                    },
+                    async archive(sid) {
+                        f.archived.push(sid);
+                        return true;
+                    },
+                    close() {
+                        f.closed++;
+                    },
+                };
+                return t;
+            },
+            async crypto() {
+                return plainCrypto;
+            },
+        };
+        return f;
+    }
+
+    let dir: string;
+    let ledger: string;
+    let home: string;
+    let env: Env;
+
+    beforeEach(() => {
+        dir = mkdtempSync(join(tmpdir(), 'stale-dead-'));
+        ledger = join(dir, 'sessions.json');
+        home = join(dir, 'happy');
+        mkdirSync(home);
+        writeFileSync(ledger, JSON.stringify(LEDGER));
+        writeFileSync(join(home, 'access.key'), JSON.stringify({ token: 't0k' }));
+        const rows = join(dir, 'rows');
+        const srows = join(dir, 'srows');
+        writeFileSync(rows, '');
+        writeFileSync(srows, '');
+        env = {
+            HOME: dir,
+            STATE_DIR: dir,
+            DROVER_DIR: dir,
+            DROVER_FORK_CLI: join(dir, 'happy-cli'),
+            DROVER_STALE_ROWS: rows,
+            DROVER_STALE_SERVICE_ROWS: srows,
+            DROVER_STALE_DIST_MTIME: String(Math.floor(NOW / 1000) - 600),
+            DROVER_STALE_LEDGER: ledger,
+            HAPPY_HOME_DIR: home,
+            HAPPY_SERVER_URL: 'http://srv',
+        };
+    });
+
+    afterEach(() => {
+        rmSync(dir, { recursive: true, force: true });
+    });
+
+    async function run2(args: string[], e: Env, registry: LedgerRegistry): Promise<Captured> {
+        refuseRealHappyHome(process.env, 'run2');
+        const out: string[] = [];
+        const err: string[] = [];
+        const so = vi.spyOn(process.stdout, 'write').mockImplementation((c: string | Uint8Array) => (out.push(String(c)), true));
+        const se = vi.spyOn(process.stderr, 'write').mockImplementation((c: string | Uint8Array) => (err.push(String(c)), true));
+        try {
+            const code = await run(args, { env: e, probe: noProbe, uid: () => 501, registry });
+            const text = out.join('');
+            return { code, out: text, err: err.join(''), lines: text.split('\n').filter((l) => l !== '') };
+        } finally {
+            so.mockRestore();
+            se.mockRestore();
+        }
+    }
+
+    it('which ledger: the named one, else silence under injected rows, else the happy home\'s', () => {
+        expect(staleLedgerFile({ DROVER_STALE_LEDGER: '/l', DROVER_STALE_ROWS: '/r' }, '/Users/x')).toBe('/l');
+        expect(staleLedgerFile({ DROVER_STALE_ROWS: '/r' }, '/Users/x')).toBeNull();
+        expect(staleLedgerFile({ HAPPY_HOME_DIR: '/h' }, '/Users/x')).toBe('/h/sessions.json');
+    });
+
+    it('deadRegistered: a harness session whose pid is gone, never claude, never one already archived, newest first', () => {
+        const alive = (pid: number | null): boolean => pid === process.pid;
+        const dead = deadRegistered(readLedger(ledger, NOW), alive);
+        expect(dead.map((e) => e.id)).toEqual([C, B]);
+        const report = renderDeadReport(dead, new Set([C]));
+        expect(report).toEqual([
+            'drover: 1 registered session(s) whose process is gone are still running on the phone:',
+            `  codex    bbbbbbbb  pid ${DEAD_PID} gone · fix the build`,
+            'drover: the watch shows each as active until it is archived. Retire them with: drover stale-sessions --archive',
+        ]);
+        expect(renderDeadReport(dead, new Set([B, C]))).toEqual([]);
+    });
+
+    it('with rows injected and no ledger named, the half is silent and --archive says so, and the server is never asked', async () => {
+        const registry = fake([]);
+        const quiet = { ...env, DROVER_STALE_LEDGER: undefined };
+        const report = await run2([], quiet, registry);
+        expect(report.code).toBe(0);
+        expect(report.out).not.toContain('registered session');
+        const archive = await run2(['--archive'], quiet, registry);
+        expect(archive.code).toBe(0);
+        expect(archive.out).toBe('drover: rows are injected (DROVER_STALE_ROWS) and no ledger is named (DROVER_STALE_LEDGER); nothing archived.\n');
+        expect(registry.listCalls).toBe(0);
+    });
+
+    it('the report names each dead codex and opencode with its pid, after the stale sections; the live cursor and the claude are not named', async () => {
+        const registry = fake([]);
+        const r = await run2([], env, registry);
+        expect(r.code).toBe(0);
+        expect(registry.listCalls).toBe(1);
+        const at = r.lines.indexOf('drover: 2 registered session(s) whose process is gone are still running on the phone:');
+        expect(at).toBeGreaterThan(0);
+        expect(r.lines.slice(at)).toEqual([
+            'drover: 2 registered session(s) whose process is gone are still running on the phone:',
+            `  opencode cccccccc  pid ${DEAD_PID_2} gone · /Users/x/three`,
+            `  codex    bbbbbbbb  pid ${DEAD_PID} gone · fix the build`,
+            'drover: the watch shows each as active until it is archived. Retire them with: drover stale-sessions --archive',
+        ]);
+        expect(r.out).not.toContain('still going');
+        expect(r.out).not.toContain('a claude that ended');
+        expect(r.err).toBe('');
+    });
+
+    it('one the server has already archived is not named; when every dead one is, the section is absent', async () => {
+        const one = fake([{ id: C, active: false, activeAt: 1, updatedAt: 1, metadata: blob({ lifecycleState: 'archived' }), metadataVersion: 2 }]);
+        const r = await run2([], env, one);
+        expect(r.out).toContain('1 registered session(s) whose process is gone');
+        expect(r.out).not.toContain('cccccccc');
+        expect(r.out).toContain('bbbbbbbb');
+        const both = fake([
+            { id: C, active: false, activeAt: 1, updatedAt: 1, metadata: blob({ lifecycleState: 'archived' }), metadataVersion: 2 },
+            { id: B, active: false, activeAt: 1, updatedAt: 1, metadata: blob({ lifecycleState: 'archived' }), metadataVersion: 2 },
+        ]);
+        const none = await run2([], env, both);
+        expect(none.out).not.toContain('registered session');
+    });
+
+    it('when the server cannot be asked, the report says why and still names them', async () => {
+        const down = await run2([], env, fake(new Error('http://srv did not answer within 5s')));
+        expect(down.code).toBe(0);
+        expect(down.out).toContain('drover: 2 registered session(s) whose process is gone may still be running on the phone, but the happy server was not asked (the happy server did not answer (http://srv did not answer within 5s)):');
+        expect(down.out).toContain('cccccccc');
+        expect(down.out).toContain('bbbbbbbb');
+        rmSync(join(home, 'access.key'));
+        const noLogin = await run2([], env, fake([]));
+        expect(noLogin.out).toContain(`but the happy server was not asked (no login under ${home}):`);
+    });
+
+    it('--archive stamps each dead session archived over the transport, POSTs, writes it through to the ledger, and is done the second time', async () => {
+        const registry = fake([]);
+        const r = await run2(['--archive'], env, registry);
+        expect(r.code).toBe(0);
+        expect(r.err).toBe('');
+        expect(r.lines).toEqual([
+            'drover: archiving 2 registered session(s) whose process is gone:',
+            '  archived  opencode cccccccc  /Users/x/three',
+            '  archived  codex    bbbbbbbb  fix the build',
+            'drover: archived 2, already archived 0, failed 0.',
+        ]);
+        expect(registry.updates.map((u) => u.sid)).toEqual([C, B]);
+        expect(registry.updates[1]).toMatchObject({ expectedVersion: 1, metadata: { name: 'fix the build', flavor: 'codex', lifecycleState: 'archived' } });
+        expect(typeof (registry.updates[1].metadata as Record<string, unknown>).lifecycleStateSince).toBe('number');
+        expect(registry.archived).toEqual([C, B]);
+        expect(registry.closed).toBe(1);
+        // Written through: the ledger now says archived, and only for those two.
+        const after = JSON.parse(readFileSync(ledger, 'utf8')) as { sessions: Record<string, { metadata: Record<string, unknown> }> };
+        expect(after.sessions[B].metadata.lifecycleState).toBe('archived');
+        expect(after.sessions[C].metadata.lifecycleState).toBe('archived');
+        expect(after.sessions[L].metadata.lifecycleState).toBe('running');
+        expect(after.sessions[K].metadata.lifecycleState).toBe('running');
+        // So the next run has nothing to do, and the report has nothing to say.
+        const again = await run2(['--archive'], env, registry);
+        expect(again.code).toBe(0);
+        expect(again.out).toBe('drover: every registered codex, cursor, opencode, gemini and pi session still has its process; nothing to archive.\n');
+        expect(registry.listCalls).toBe(1);
+        const report = await run2([], env, registry);
+        expect(report.out).not.toContain('registered session');
+    });
+
+    it('--archive: one the server already archived is written through and counted, not stamped again', async () => {
+        const registry = fake([{ id: C, active: false, activeAt: 1, updatedAt: 1, metadata: blob({ lifecycleState: 'archived' }), metadataVersion: 2 }]);
+        const r = await run2(['--archive'], env, registry);
+        expect(r.code).toBe(0);
+        expect(r.lines).toEqual([
+            'drover: archiving 1 registered session(s) whose process is gone:',
+            '  archived  codex    bbbbbbbb  fix the build',
+            'drover: archived 1, already archived 1, failed 0.',
+        ]);
+        expect(registry.updates.map((u) => u.sid)).toEqual([B]);
+        const after = JSON.parse(readFileSync(ledger, 'utf8')) as { sessions: Record<string, { metadata: Record<string, unknown> }> };
+        expect(after.sessions[C].metadata.lifecycleState).toBe('archived');
+        expect(after.sessions[B].metadata.lifecycleState).toBe('archived');
+
+        // And when every dead one is already archived there, only the ledger moves.
+        writeFileSync(ledger, JSON.stringify(LEDGER));
+        const all = fake([
+            { id: C, active: false, activeAt: 1, updatedAt: 1, metadata: blob({ lifecycleState: 'archived' }), metadataVersion: 2 },
+            { id: B, active: false, activeAt: 1, updatedAt: 1, metadata: blob({ lifecycleState: 'archived' }), metadataVersion: 2 },
+        ]);
+        const done = await run2(['--archive'], env, all);
+        expect(done.code).toBe(0);
+        expect(done.out).toBe('drover: all 2 dead registered session(s) were already archived on the server; the ledger now says so.\n');
+        expect(all.updates).toEqual([]);
+    });
+
+    it('--archive: a version mismatch is retried on the server\'s metadata; an error is a failed line and exit 1', async () => {
+        const registry = fake([], [
+            { result: 'version-mismatch', version: 7, metadata: blob({ flavor: 'opencode', name: 'renamed on the phone', lifecycleState: 'running' }) },
+            { result: 'success' },
+            { result: 'error' },
+        ]);
+        const r = await run2(['--archive'], env, registry);
+        expect(r.code).toBe(1);
+        expect(r.lines).toEqual([
+            'drover: archiving 2 registered session(s) whose process is gone:',
+            '  archived  opencode cccccccc  /Users/x/three',
+            '  failed    codex    bbbbbbbb  fix the build',
+            'drover: archived 1, already archived 0, failed 1.',
+        ]);
+        expect(registry.updates.map((u) => [u.sid, u.expectedVersion])).toEqual([[C, 1], [C, 7], [B, 1]]);
+        expect(registry.updates[1].metadata).toMatchObject({ name: 'renamed on the phone', lifecycleState: 'archived' });
+        expect(registry.archived).toEqual([C]);
+        // The one that failed is NOT written through: the ledger still names it.
+        const after = JSON.parse(readFileSync(ledger, 'utf8')) as { sessions: Record<string, { metadata: Record<string, unknown> }> };
+        expect(after.sessions[C].metadata.lifecycleState).toBe('archived');
+        expect(after.sessions[B].metadata.lifecycleState).toBe('running');
+    });
+
+    it('--archive exits 1, archiving nothing, when the server cannot be listed or the socket will not open', async () => {
+        const unlisted = await run2(['--archive'], env, fake(new Error('http://srv answered 401')));
+        expect(unlisted.code).toBe(1);
+        expect(unlisted.out).toBe('');
+        expect(unlisted.err).toBe('drover: the happy server did not answer (http://srv answered 401); nothing archived.\n');
+        const noSocket = fake([], [], new Error('refused'));
+        const closed = await run2(['--archive'], env, noSocket);
+        expect(closed.code).toBe(1);
+        expect(closed.err).toBe('drover: could not open the archive socket (refused); nothing archived.\n');
+        expect(noSocket.updates).toEqual([]);
+        const after = JSON.parse(readFileSync(ledger, 'utf8')) as { sessions: Record<string, { metadata: Record<string, unknown> }> };
+        expect(after.sessions[B].metadata.lifecycleState).toBe('running');
+    });
+
+    it('--archive is the flag, spelled exactly; a near miss is refused before anything is read', async () => {
+        const registry = fake([]);
+        const r = await run2(['--archived'], env, registry);
+        expect(r.code).toBe(2);
+        expect(r.err).toBe('drover stale-sessions: unknown argument: --archived\n');
+        expect(registry.listCalls).toBe(0);
     });
 });

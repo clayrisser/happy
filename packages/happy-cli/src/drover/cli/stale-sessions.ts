@@ -30,6 +30,25 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 
 import { droverEnv } from './env';
+import {
+    accessTokenOf,
+    archiveEntry,
+    fetchServerSessions,
+    happyHomeOf,
+    ledgerCrypto,
+    ledgerFileOf,
+    markLedgerArchived,
+    pidAlive,
+    readLedger,
+    serverStates,
+    serverUrlOf,
+    socketArchiveTransport,
+    type ArchiveTransport,
+    type LedgerCrypto,
+    type LedgerEntry,
+    type ServerSession,
+    type ServerState,
+} from './happyLedger';
 
 const HELP = `drover stale-sessions — sessions and services running code a change replaced.
 
@@ -38,6 +57,10 @@ USAGE
   drover stale-sessions --raw  One TAB row per session: pid, start epoch,
                                supervised (1/0), claude session id, name
                                (sessions only — services are not in --raw)
+  drover stale-sessions --archive
+                               Retire every daemon-registered codex, cursor,
+                               opencode, gemini or pi session whose process is
+                               gone, the way the app's Archive button does
 
 WHY
   A session is one long-lived packages/happy-cli/dist/index.mjs. A rebuild
@@ -51,6 +74,16 @@ WHY
   The bus that answered 404 for /v1/mcps had been up since before the route
   existed (DROVE-274). Each service's start time is compared against the
   newest mtime of the code it loads, and one behind gets its kickstart line.
+
+DEAD SESSIONS (DROVE-389)
+  A harness session the daemon registered stays 'running' on the phone and
+  the watch until something archives it, and when its process was killed
+  nothing ever does: the green "cattle-drover" row for an opencode that died
+  hours ago. The report names every registered codex, cursor, opencode,
+  gemini or pi session whose pid is gone and which the server has not
+  archived; --archive retires them, and the ledger the daemon keeps
+  (<happy home>/sessions.json) is marked so \`drover sessions\` agrees.
+  Claude sessions are the bus's business, not this verb's.
 
 WHAT HAPPENS NEXT
   A session started through bin/drover.mjs new enough to supervise itself
@@ -101,6 +134,25 @@ export const systemProbe: Probe = {
     launchctlList: (label) => ask('launchctl', ['list', label]),
 };
 
+/**
+ * The happy server, for the dead-session half (DROVE-389): the listing, the
+ * archive socket, and the crypto the two need. The default reaches the real
+ * server; a test hands in one that answers from fixtures and records what was
+ * archived, and none of it is touched until the ledger has named a dead
+ * session.
+ */
+export interface LedgerRegistry {
+    list(serverUrl: string, token: string, timeoutMs: number): Promise<ServerSession[]>;
+    transport(serverUrl: string, token: string, timeoutMs: number): Promise<ArchiveTransport>;
+    crypto(): Promise<LedgerCrypto>;
+}
+
+export const serverRegistry: LedgerRegistry = {
+    list: fetchServerSessions,
+    transport: socketArchiveTransport,
+    crypto: ledgerCrypto,
+};
+
 export interface StaleOptions {
     /** The environment; process.env unless a test says otherwise. */
     env?: Env;
@@ -110,6 +162,8 @@ export interface StaleOptions {
     now?: () => number;
     /** This user's uid, for the kickstart line (`id -u`). */
     uid?: () => number | string;
+    /** The happy server, for the dead-session half. */
+    registry?: LedgerRegistry;
 }
 
 /** One session launcher, as stale_scan printed it: five TAB fields. */
@@ -495,6 +549,159 @@ export function renderServiceReport(rows: ServiceRow[], uid: string, prefix: str
     return out;
 }
 
+// --- the dead sessions the daemon still lists (DROVE-389) -------------------------
+//
+// The phone and the watch read `lifecycleState` off the session's metadata,
+// and a runner that was killed never sets it: an opencode that died at noon is
+// a green row at midnight. The daemon's ledger has every registered session
+// with the pid it ran under, so a dead one is one whose pid is gone; the
+// server is asked which of those the phone already archived, and --archive
+// retires the rest the way the Archive button does (happyLedger.ts).
+//
+// Claude sessions are left out on purpose. The bus owns them, `drover
+// sessions` shows them, and the 493 of them whose pid is gone this fortnight
+// are conversations Clay resumes, not residue.
+
+/**
+ * Which ledger this run reads. DROVER_STALE_LEDGER names one, the way
+ * DROVER_STALE_ROWS names rows; with rows injected and no ledger named the
+ * half is SILENT, because a suite running against invented sessions must not
+ * read Clay's real ledger or ask his real server either.
+ */
+export function staleLedgerFile(env: Env, home: string): string | null {
+    if (env.DROVER_STALE_LEDGER) return env.DROVER_STALE_LEDGER;
+    if (env.DROVER_STALE_ROWS) return null;
+    return ledgerFileOf(env, home);
+}
+
+/** A registered harness session whose runner is gone and which the ledger does not already call archived, newest first. */
+export function deadRegistered(entries: LedgerEntry[], alive: (pid: number | null) => boolean = pidAlive): LedgerEntry[] {
+    return entries
+        .filter((e) => e.flavor !== 'claude' && e.lifecycleState !== 'archived' && !alive(e.hostPid))
+        .sort((a, b) => b.savedAt - a.savedAt);
+}
+
+/** '  %-8s %-9s pid %s gone · %s': flavor, the first eight of the id, the pid, the name or the cwd. */
+function deadLine(e: LedgerEntry): string {
+    return `  ${e.flavor.padEnd(8)} ${e.id.slice(0, 8).padEnd(9)} pid ${e.hostPid ?? '-'} gone · ${e.name ?? e.path}`;
+}
+
+export function renderDeadReport(dead: LedgerEntry[], archived: Set<string>, prefix: string = PREFIX): string[] {
+    const open = dead.filter((e) => !archived.has(e.id));
+    if (open.length === 0) return [];
+    return [
+        `${prefix}: ${open.length} registered session(s) whose process is gone are still running on the phone:`,
+        ...open.map(deadLine),
+        `${prefix}: the watch shows each as active until it is archived. Retire them with: drover stale-sessions --archive`,
+    ];
+}
+
+interface ServerAnswer {
+    states: Map<string, ServerState>;
+    url: string;
+    token: string;
+}
+
+/** The server's word on the dead entries, or the one-line reason it has none. */
+async function askServer(
+    dead: LedgerEntry[],
+    env: Env,
+    home: string,
+    registry: LedgerRegistry,
+    timeoutMs: number,
+): Promise<ServerAnswer | { problem: string }> {
+    const happyHome = happyHomeOf(env, home);
+    const token = accessTokenOf(happyHome);
+    if (!token) return { problem: `no login under ${happyHome}` };
+    const server = serverUrlOf(env, home);
+    if ('error' in server) return { problem: server.error };
+    try {
+        const listed = await registry.list(server.url, token, timeoutMs);
+        return { states: serverStates(dead, listed, await registry.crypto()), url: server.url, token };
+    } catch (e) {
+        return { problem: `the happy server did not answer (${e instanceof Error ? e.message : String(e)})` };
+    }
+}
+
+function archivedIn(states: Map<string, ServerState>): Set<string> {
+    return new Set([...states].filter(([, s]) => s.lifecycleState === 'archived').map(([id]) => id));
+}
+
+/** The default report's last section: nothing at all while every registered session has its process. */
+async function deadReport(ledgerFile: string | null, env: Env, home: string, registry: LedgerRegistry, now: () => number, timeoutMs: number): Promise<string[]> {
+    if (!ledgerFile) return [];
+    const dead = deadRegistered(readLedger(ledgerFile, now() * 1000));
+    if (dead.length === 0) return [];
+    const answer = await askServer(dead, env, home, registry, timeoutMs);
+    if ('problem' in answer) {
+        return [
+            `${PREFIX}: ${dead.length} registered session(s) whose process is gone may still be running on the phone, but the happy server was not asked (${answer.problem}):`,
+            ...dead.map(deadLine),
+        ];
+    }
+    return renderDeadReport(dead, archivedIn(answer.states));
+}
+
+/**
+ * --archive. Exit 0 with nothing to do or everything done; 1 when the server
+ * could not be reached or a session could not be archived, because this is
+ * an ACTION somebody asked for, not the report bolted onto the ship loop.
+ */
+async function archiveDead(ledgerFile: string | null, env: Env, home: string, registry: LedgerRegistry, now: () => number, timeoutMs: number): Promise<number> {
+    if (!ledgerFile) {
+        say([`${PREFIX}: rows are injected (DROVER_STALE_ROWS) and no ledger is named (DROVER_STALE_LEDGER); nothing archived.`]);
+        return 0;
+    }
+    const dead = deadRegistered(readLedger(ledgerFile, now() * 1000));
+    if (dead.length === 0) {
+        say([`${PREFIX}: every registered codex, cursor, opencode, gemini and pi session still has its process; nothing to archive.`]);
+        return 0;
+    }
+    const answer = await askServer(dead, env, home, registry, timeoutMs);
+    if ('problem' in answer) {
+        complain([`${PREFIX}: ${answer.problem}; nothing archived.`]);
+        return 1;
+    }
+    const archived = archivedIn(answer.states);
+    const already = dead.filter((e) => archived.has(e.id));
+    const todo = dead.filter((e) => !archived.has(e.id));
+    if (todo.length === 0) {
+        markLedgerArchived(ledgerFile, already.map((e) => e.id), now() * 1000);
+        say([`${PREFIX}: all ${dead.length} dead registered session(s) were already archived on the server; the ledger now says so.`]);
+        return 0;
+    }
+    let transport: ArchiveTransport;
+    try {
+        transport = await registry.transport(answer.url, answer.token, timeoutMs);
+    } catch (e) {
+        complain([`${PREFIX}: could not open the archive socket (${e instanceof Error ? e.message : String(e)}); nothing archived.`]);
+        return 1;
+    }
+    const crypto = await registry.crypto();
+    const lines: string[] = [`${PREFIX}: archiving ${todo.length} registered session(s) whose process is gone:`];
+    const done: string[] = [];
+    let failed = 0;
+    try {
+        for (const e of todo) {
+            const outcome = await archiveEntry(e, transport, crypto, () => now() * 1000);
+            const who = `${e.flavor.padEnd(8)} ${e.id.slice(0, 8).padEnd(9)} ${e.name ?? e.path}`;
+            if (outcome === 'failed') {
+                failed++;
+                lines.push(`  failed    ${who}`);
+            } else {
+                done.push(e.id);
+                lines.push(`  ${outcome === 'archived' ? 'archived ' : 'already  '} ${who}`);
+            }
+        }
+    } finally {
+        transport.close();
+    }
+    markLedgerArchived(ledgerFile, [...done, ...already.map((e) => e.id)], now() * 1000);
+    lines.push(`${PREFIX}: archived ${done.length}, already archived ${already.length}, failed ${failed}.`);
+    say(lines);
+    return failed > 0 ? 1 : 0;
+}
+
 function say(lines: string[]): void {
     if (lines.length) process.stdout.write(lines.join('\n') + '\n');
 }
@@ -515,7 +722,7 @@ export async function run(args: string[], opts: StaleOptions = {}): Promise<numb
         process.stdout.write(HELP);
         return 0;
     }
-    if (first !== undefined && first !== '' && first !== '--raw') {
+    if (first !== undefined && first !== '' && first !== '--raw' && first !== '--archive') {
         complain([`drover stale-sessions: unknown argument: ${first}`]);
         return 2;
     }
@@ -526,6 +733,13 @@ export async function run(args: string[], opts: StaleOptions = {}): Promise<numb
     const denv = droverEnv(env);
     const cli = env.DROVER_FORK_CLI || join(denv.forkDir, 'packages', 'happy-cli');
     const mtime = env.DROVER_STALE_DIST_MTIME || staleDistMtime(cli);
+
+    const home = env.HOME ?? homedir();
+    const ledgerFile = staleLedgerFile(env, home);
+    const registry = opts.registry ?? serverRegistry;
+    const happyTimeoutMs = Number(env.DROVER_HAPPY_TIMEOUT_S || '5') * 1000;
+
+    if (first === '--archive') return archiveDead(ledgerFile, env, home, registry, now, happyTimeoutMs);
 
     if (first === '--raw') {
         if (!mtime) return 0;
@@ -544,5 +758,9 @@ export async function run(args: string[], opts: StaleOptions = {}): Promise<numb
     // is not necessarily the one the service is on.
     const uid = String(opts.uid ? opts.uid() : (process.getuid?.() ?? ''));
     say(renderServiceReport(staleServiceScan(denv.droverDir, cli, env, probe, now), uid));
+    // And the sessions nothing will ever end (DROVE-389). Silent while every
+    // registered session has its process; the ledger is read locally first
+    // and the server asked only once something is dead.
+    say(await deadReport(ledgerFile, env, home, registry, now, happyTimeoutMs));
     return 0;
 }
