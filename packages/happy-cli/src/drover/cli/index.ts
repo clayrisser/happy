@@ -159,6 +159,11 @@ export const droverVerbs: readonly DroverVerb[] = [
         summary: 'What the injected /flip slash command runs inside the claude child. Every path exits 0.',
         load: () => import('./flip-request'),
     },
+    {
+        name: 'sync-commands',
+        summary: "Put /flip in every account's Claude Code config dir, link the shared trees, and mirror the gates and the MCP servers. Never blocks.",
+        load: () => import('./sync-commands'),
+    },
     // --- the harness launcher family (DROVE-315 wave 3a) --------------------
     //
     // `codex`, `cursor` and `pi` are also arms in src/index.ts, which sits
