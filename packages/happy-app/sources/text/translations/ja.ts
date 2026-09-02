@@ -1289,6 +1289,7 @@ export const ja: TranslationStructure = {
             : `${count}枚の画像をアップロードできず、送信されませんでした。`,
         notSupportedTitle: '画像はサポートされていません',
         notSupportedMessage: 'このエージェントは画像の添付に対応していません。画像は送信されませんでした。',
+        notSupportedFragment: 'このエージェントは画像を扱えません',
         // The Add context sheet the plus opens (DROVE-128).
         addContextTitle: 'コンテキストを追加',
         sourceCamera: 'カメラ',

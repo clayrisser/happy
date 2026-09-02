@@ -72,6 +72,8 @@ import {
 } from './cursorPermission';
 import { cursorApiKeySourceIsOwnLogin } from './cursorEnv';
 import { addCursorUsage, emptyCursorUsageTally, type CursorUsageTally } from './cursorStream';
+import { subscribeHarnessAttachments, textWithHarnessAttachments } from '@/utils/harnessAttachments';
+import { createSerialAsyncHandler } from '@/codex/utils/serialAsyncHandler';
 
 export interface RunCursorOptions {
     credentials: Credentials;
@@ -270,10 +272,17 @@ export async function runCursor(opts: RunCursorOptions): Promise<void> {
     };
     backend.onMessage(onBackendMessage);
 
-    session.onUserMessage((message) => {
-        if (!message.content.text) return;
-        messageQueue.push(message.content.text, {});
-    });
+    subscribeHarnessAttachments(session, 'cursor');
+    session.onUserMessage(createSerialAsyncHandler(async (message) => {
+        const attachments = await session.drainAttachmentsForUserMessage();
+        // An image with no words is a real message (DROVE-378).
+        if (!message.content.text && attachments.length === 0) return;
+        messageQueue.push(message.content.text ?? '', {}, attachments.length > 0 ? attachments : undefined);
+    }, (error) => {
+        logger.warn('[cursor] Failed to handle user message', {
+            errorName: error instanceof Error ? error.name : typeof error,
+        });
+    }));
 
     // A model, effort or mode picked in the app arrives as a metadata update
     // and takes effect on the NEXT turn. None of them can change the turn
@@ -379,7 +388,12 @@ export async function runCursor(opts: RunCursorOptions): Promise<void> {
             session.keepAlive(true, 'remote');
             sendEnvelopes(sessionManager.startTurn());
             try {
-                await backend.sendPrompt(started.sessionId, batch.message);
+                await backend.sendPrompt(started.sessionId, textWithHarnessAttachments({
+                    text: batch.message,
+                    attachments: batch.attachments,
+                    sessionId: session.sessionId,
+                    harness: 'cursor',
+                }));
                 sendEnvelopes(sessionManager.endTurn('completed'));
             } catch (error) {
                 const detail = error instanceof Error ? error.message : String(error);

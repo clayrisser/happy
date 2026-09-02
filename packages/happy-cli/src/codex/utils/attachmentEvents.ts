@@ -1,6 +1,13 @@
+/**
+ * Codex's file-event download, which is now the shared one (DROVE-378).
+ *
+ * This was the only copy until every other harness needed the same three
+ * lines. It stays as a named export because runCodex and its tests call it,
+ * but the body lives in `@/utils/harnessAttachments` so the two cannot drift.
+ */
 import type { ApiSessionClient } from '@/api/apiSession';
 import type { FileEventMessage } from '@/api/types';
-import { logger } from '@/ui/logger';
+import { downloadFileEventAttachment } from '@/utils/harnessAttachments';
 import type { PendingAttachment } from '@/utils/MessageQueue2';
 
 type CodexAttachmentDownloader = Pick<ApiSessionClient, 'downloadAndDecryptAttachment'>;
@@ -9,22 +16,5 @@ export async function downloadCodexFileEventAttachment(
     session: CodexAttachmentDownloader,
     fileEvent: FileEventMessage,
 ): Promise<PendingAttachment | null> {
-    const ev = fileEvent.content.data.ev;
-    try {
-        const decrypted = await session.downloadAndDecryptAttachment(ev.ref);
-        if (!decrypted) {
-            logger.debug('[Codex] Failed to decrypt attachment');
-            return null;
-        }
-        return {
-            data: decrypted,
-            mimeType: ev.mimeType ?? 'image/jpeg',
-            name: ev.name,
-        };
-    } catch (error) {
-        logger.debug('[Codex] Failed to download attachment', {
-            errorName: error instanceof Error ? error.name : typeof error,
-        });
-        return null;
-    }
+    return downloadFileEventAttachment(session, fileEvent, 'Codex');
 }

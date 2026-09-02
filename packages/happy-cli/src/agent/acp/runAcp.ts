@@ -9,6 +9,8 @@ import { AcpSessionManager } from './AcpSessionManager';
 import type { SessionEnvelope } from '@slopus/happy-wire';
 import { logger } from '@/ui/logger';
 import { MessageQueue2 } from '@/utils/MessageQueue2';
+import { downloadFileEventAttachment } from '@/utils/harnessAttachments';
+import { createSerialAsyncHandler } from '@/codex/utils/serialAsyncHandler';
 import { hashObject } from '@/utils/deterministicJson';
 import { Credentials, readSettings } from '@/persistence';
 import { initialMachineMetadata } from '@/daemon/run';
@@ -830,8 +832,32 @@ export async function runAcp(opts: {
 
   backend.onMessage(onBackendMessage);
 
-  session.onUserMessage((message) => {
-    if (!message.content.text) {
+  /*
+   * An image sent from the phone (DROVE-378). Until this, `runAcp` was the one
+   * runner that never subscribed, so the file event sat in `pendingFileEvents`
+   * and the bytes were dropped without a word — which is what "the phone is
+   * not letting me submit an image" looked like from the OpenCode side.
+   */
+  session.onFileEvent((fileEvent) => {
+    const ev = fileEvent.content.data.ev;
+    logger.debug(`[${opts.agentName}] File event received`, {
+      size: ev.size,
+      hasMimeType: Boolean(ev.mimeType),
+    });
+    session.trackAttachmentDownload(downloadFileEventAttachment(session, fileEvent, opts.agentName));
+  });
+
+  /*
+   * Serial, because the handler now awaits the attachment downloads and two
+   * messages arriving together would otherwise finish out of order and hand
+   * the second message's image to the first.
+   */
+  session.onUserMessage(createSerialAsyncHandler(async (message) => {
+    const attachments = await session.drainAttachmentsForUserMessage();
+
+    // An image with no words is a real message, so emptiness alone is no
+    // longer the drop condition — only emptiness with nothing attached.
+    if (!message.content.text && attachments.length === 0) {
       return;
     }
 
@@ -845,11 +871,15 @@ export async function runAcp(opts: {
       logger.debug(`[${opts.agentName}] Requested ACP model: ${currentModel ?? 'null'}`);
     }
 
-    messageQueue.push(message.content.text, {
+    messageQueue.push(message.content.text ?? '', {
       permissionMode: currentPermissionMode,
       model: currentModel,
+    }, attachments.length > 0 ? attachments : undefined);
+  }, (error) => {
+    logger.warn(`[${opts.agentName}] Failed to handle user message`, {
+      errorName: error instanceof Error ? error.name : typeof error,
     });
-  });
+  }));
   session.keepAlive(thinking, 'remote');
 
   const keepAliveInterval = setInterval(() => {
@@ -920,7 +950,7 @@ export async function runAcp(opts: {
         if (typeof batch.mode.model === 'string' && batch.mode.model.length > 0) {
           await switchModelIfRequested(batch.mode.model);
         }
-        await backend.sendPrompt(acpSessionId, batch.message);
+        await backend.sendPrompt(acpSessionId, batch.message, batch.attachments);
         await turnEnded;
         sendEnvelopes(sessionManager.endTurn('completed'));
         session.sendSessionEvent({ type: 'ready' });

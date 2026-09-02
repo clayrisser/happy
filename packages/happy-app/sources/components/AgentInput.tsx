@@ -45,6 +45,8 @@ import { audioOutButton } from './composerAudioOut';
 import type { TransportEffect } from '@/voice/readAloudTransport';
 import { AgentInputStatusRow } from './AgentInputStatusRow';
 import { AddContextSheet, type AddContextSource } from './AddContextSheet';
+import { Modal } from '@/modal';
+import { resolveComposerAttachmentAffordance } from '@/sync/attachmentSupport';
 import { resolveUsageStrip } from './agentInputUsage';
 import { ProviderIcon } from './ProviderIcon';
 import { isRigMetadata } from '@/sync/rig';
@@ -270,6 +272,15 @@ interface AgentInputProps {
     onPickFiles?: () => void;
     onRemoveImage?: (id: string) => void;
     onAddImages?: (images: AttachmentPreview[]) => void;
+    /**
+     * Set when this session's harness has no way to take an image (DROVE-378).
+     *
+     * The plus is still drawn and still pressable; it says this sentence
+     * instead of opening the sheet. Hiding the control was the bug — a missing
+     * affordance reads as the app being broken, and Clay reported it as the
+     * phone "not letting me submit an image".
+     */
+    attachmentsUnsupportedNote?: string;
 }
 
 /**
@@ -1244,12 +1255,40 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         photos: !!props.onPickImages,
         files: !!props.onPickFiles,
     }), [props.onPickFiles, props.onPickImages, props.onTakePhoto]);
-    const canAddContext = addContextAvailable.camera
-        || addContextAvailable.photos
-        || addContextAvailable.files;
+    /*
+     * The plus is drawn whenever the composer has an attachment story to tell,
+     * and "this harness cannot take one" IS a story (DROVE-378). Before this,
+     * a session with no picker handlers lost the control entirely and the user
+     * was left pressing where it used to be.
+     */
+    const attachmentAffordance = resolveComposerAttachmentAffordance({
+        supportsAttachments: !props.attachmentsUnsupportedNote,
+        hasAnyPicker: addContextAvailable.camera || addContextAvailable.photos || addContextAvailable.files,
+    });
+    /*
+     * Always drawn. `refuse` is a STATE of the plus, not its absence — the bug
+     * was a control that vanished, and there is no reading of a missing button
+     * other than "the app is broken" (DROVE-378).
+     */
+    const canAddContext = true;
+    const refusalNote = props.attachmentsUnsupportedNote ?? t('imageUpload.notSupportedFragment');
     const handleAddContextPress = React.useCallback(() => {
+        if (attachmentAffordance === 'refuse') {
+            // One fragment, no title and no body (DROVE-346). It is the whole
+            // answer, so there is nothing for a second line to add.
+            Modal.alert(refusalNote);
+            return;
+        }
         handlePickerPress('attach');
-    }, [handlePickerPress]);
+    }, [attachmentAffordance, refusalNote, handlePickerPress]);
+    /** The desktop composer's image button, refusing on the same terms. */
+    const handleImageButtonPress = React.useCallback(() => {
+        if (attachmentAffordance === 'refuse') {
+            Modal.alert(refusalNote);
+            return;
+        }
+        props.onPickImages?.();
+    }, [attachmentAffordance, refusalNote, props.onPickImages]);
     const handleAddContextSelect = React.useCallback((source: AddContextSource) => {
         if (source === 'camera') props.onTakePhoto?.();
         else if (source === 'photos') props.onPickImages?.();
@@ -1687,9 +1726,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
                         <GitStatusButton sessionId={props.sessionId} onPress={props.onFileViewerPress} />
 
-                        {props.onPickImages && (
+                        {(props.onPickImages || attachmentAffordance === 'refuse') && (
                             <Pressable
-                                onPress={props.onPickImages}
+                                onPress={handleImageButtonPress}
                                 hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
                                 style={(p) => ({
                                     flexDirection: 'row',

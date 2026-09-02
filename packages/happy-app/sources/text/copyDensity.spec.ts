@@ -368,6 +368,7 @@ describe('copy density: settings copy that arrives through t()', () => {
     const rows: { key: string; kind: 'subtitle' | 'footer'; text: string }[] = [
         { key: 'agentInput.channels.phoneHapticsSubtitle', kind: 'subtitle', text: en.agentInput.channels.phoneHapticsSubtitle },
         { key: 'agentInput.channels.phoneHapticsFooter', kind: 'footer', text: en.agentInput.channels.phoneHapticsFooter },
+        { key: 'imageUpload.notSupportedFragment', kind: 'subtitle', text: en.imageUpload.notSupportedFragment },
     ];
 
     for (const row of rows) {
@@ -390,5 +391,25 @@ describe('copy density: settings copy that arrives through t()', () => {
         const footer = en.agentInput.channels.phoneHapticsFooter;
         expect(footer).toMatch(/[Oo]ff by default/);
         expect(footer).toMatch(/watch/i);
+    });
+});
+
+/**
+ * The plus's refusal (DROVE-378).
+ *
+ * The whole point of drawing the control on a harness that cannot take an
+ * image is that it answers instead of vanishing, so what it says is the
+ * feature. It is one fragment and it goes in the alert's TITLE slot with no
+ * body, which is why a full stop or a second clause would read as the sheet
+ * this session is not getting.
+ */
+describe('copy density: the composer plus refusing an attachment', () => {
+    it('is a lowercase fragment with no full stop', () => {
+        expect(en.imageUpload.notSupportedFragment).not.toMatch(/\.$/);
+        expect(en.imageUpload.notSupportedFragment[0]).toBe(en.imageUpload.notSupportedFragment[0].toLowerCase());
+    });
+
+    it('still names what cannot happen', () => {
+        expect(en.imageUpload.notSupportedFragment).toMatch(/image/i);
     });
 });

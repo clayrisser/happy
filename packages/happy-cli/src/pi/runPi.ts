@@ -67,6 +67,8 @@ import { PiPermissionHandler } from './piPermissionHandler';
 import { findPiBin, PI_BIN } from './piBin';
 import { listPiModels, resolvePiModel, type PiModel } from './piModels';
 import { probePiRuntime } from './piLocalRuntime';
+import { subscribeHarnessAttachments, textWithHarnessAttachments } from '@/utils/harnessAttachments';
+import { createSerialAsyncHandler } from '@/codex/utils/serialAsyncHandler';
 
 /**
  * pi's own gate has three settings and they come from the ENVIRONMENT of the
@@ -355,10 +357,17 @@ export async function runPi(opts: RunPiOptions): Promise<void> {
         }));
     }
 
-    session.onUserMessage((message) => {
-        if (!message.content.text) return;
-        messageQueue.push(message.content.text, {});
-    });
+    subscribeHarnessAttachments(session, 'pi');
+    session.onUserMessage(createSerialAsyncHandler(async (message) => {
+        const attachments = await session.drainAttachmentsForUserMessage();
+        // An image with no words is a real message (DROVE-378).
+        if (!message.content.text && attachments.length === 0) return;
+        messageQueue.push(message.content.text ?? '', {}, attachments.length > 0 ? attachments : undefined);
+    }, (error) => {
+        logger.warn('[pi] Failed to handle user message', {
+            errorName: error instanceof Error ? error.name : typeof error,
+        });
+    }));
 
     // The clone seed, queued as the first turn once the session is ours. Read
     // here rather than at parse time so a session that failed to start never
@@ -476,7 +485,12 @@ export async function runPi(opts: RunPiOptions): Promise<void> {
             session.keepAlive(true, 'remote');
             sendEnvelopes(sessionManager.startTurn());
             try {
-                await backend.sendPrompt(batch.message);
+                await backend.sendPrompt(textWithHarnessAttachments({
+                    text: batch.message,
+                    attachments: batch.attachments,
+                    sessionId: session.sessionId,
+                    harness: 'pi',
+                }));
                 sendEnvelopes(sessionManager.endTurn('completed'));
             } catch (error) {
                 const detail = error instanceof Error ? error.message : String(error);

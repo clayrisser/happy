@@ -3,12 +3,31 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => {
   const sessionHandlers = new Map<string, (params: any) => Promise<any> | any>();
   let userMessageHandler: ((message: any) => void) | null = null;
+  let fileEventHandler: ((event: any) => void) | null = null;
+  let pendingAttachments: any[] = [];
   let killHandler: (() => Promise<void>) | null = null;
 
   const mockSession = {
     onUserMessage: vi.fn((handler: (message: any) => void) => {
       userMessageHandler = handler;
     }),
+    // The attachment surface `runAcp` now uses (DROVE-378). It is the real
+    // ApiSessionClient shape: file events arrive on their own and the turn
+    // claims whatever finished downloading before it.
+    sessionId: 'session-1',
+    onFileEvent: vi.fn((handler: (event: any) => void) => {
+      fileEventHandler = handler;
+    }),
+    trackAttachmentDownload: vi.fn(async (promise: Promise<any>) => {
+      const resolved = await promise;
+      if (resolved) pendingAttachments.push(resolved);
+    }),
+    drainAttachmentsForUserMessage: vi.fn(async () => {
+      const claimed = pendingAttachments;
+      pendingAttachments = [];
+      return claimed;
+    }),
+    downloadAndDecryptAttachment: vi.fn(async (): Promise<Uint8Array | null> => null),
     keepAlive: vi.fn(),
     sendSessionProtocolMessage: vi.fn(),
     sendSessionEvent: vi.fn(),
@@ -28,7 +47,7 @@ const mocks = vi.hoisted(() => {
 
   const backendState = {
     listeners: [] as Array<(message: any) => void>,
-    prompts: [] as Array<{ sessionId: string; prompt: string }>,
+    prompts: [] as Array<{ sessionId: string; prompt: string; attachments?: any[] }>,
     setConfigOptionCalls: [] as Array<{ configId: string; value: string }>,
     setModeCalls: [] as string[],
     setModelCalls: [] as string[],
@@ -58,6 +77,13 @@ const mocks = vi.hoisted(() => {
     getUserMessageHandler: () => userMessageHandler,
     setUserMessageHandler: (handler: ((message: any) => void) | null) => {
       userMessageHandler = handler;
+    },
+    getFileEventHandler: () => fileEventHandler,
+    setFileEventHandler: (handler: ((event: any) => void) | null) => {
+      fileEventHandler = handler;
+    },
+    resetPendingAttachments: () => {
+      pendingAttachments = [];
     },
     getKillHandler: () => killHandler,
     setKillHandler: (handler: (() => Promise<void>) | null) => {
@@ -142,8 +168,8 @@ vi.mock('./AcpBackend', () => ({
       return { sessionId: 'acp-session-1' };
     }
 
-    async sendPrompt(sessionId: string, prompt: string) {
-      mocks.backendState.prompts.push({ sessionId, prompt });
+    async sendPrompt(sessionId: string, prompt: string, attachments?: any[]) {
+      mocks.backendState.prompts.push({ sessionId, prompt, attachments });
       for (const listener of mocks.backendState.listeners) {
         listener({ type: 'status', status: 'running' });
         listener({ type: 'model-output', textDelta: 'hello' });
@@ -194,6 +220,8 @@ describe('runAcp', () => {
     vi.clearAllMocks();
     mocks.sessionHandlers.clear();
     mocks.setUserMessageHandler(null);
+    mocks.setFileEventHandler(null);
+    mocks.resetPendingAttachments();
     mocks.setKillHandler(null);
     mocks.backendState.listeners = [];
     mocks.backendState.prompts = [];
@@ -265,6 +293,109 @@ describe('runAcp', () => {
       'Tool: ReadFile completed (callId=tool-1)',
       'Status: idle',
     ]));
+  });
+
+  /*
+   * DROVE-378. This runner was the one that never subscribed to file events,
+   * so an image sent from the phone was decrypted by nobody and dropped in
+   * silence. The assertion is the whole bug: the turn the harness receives
+   * carries the bytes.
+   */
+  it('hands the image the phone attached to the harness with the turn', async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7]);
+    mocks.mockSession.downloadAndDecryptAttachment.mockResolvedValue(png);
+
+    const runPromise = runAcp({
+      credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+      agentName: 'opencode',
+      command: 'opencode',
+      args: ['acp'],
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.getFileEventHandler()).toBeTypeOf('function');
+      expect(mocks.getUserMessageHandler()).toBeTypeOf('function');
+    });
+
+    mocks.getFileEventHandler()!({
+      content: { data: { ev: { t: 'file', ref: 'ref-1', name: 'shot.png', size: png.length, mimeType: 'image/png' } } },
+    });
+    await vi.waitFor(() => {
+      expect(mocks.mockSession.trackAttachmentDownload).toHaveBeenCalledTimes(1);
+    });
+
+    mocks.getUserMessageHandler()!({
+      role: 'user',
+      content: { type: 'text', text: 'what is this' },
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.backendState.prompts).toHaveLength(1);
+    });
+
+    await mocks.getKillHandler()!();
+    await runPromise;
+
+    expect(mocks.backendState.prompts[0].prompt).toBe('what is this');
+    expect(mocks.backendState.prompts[0].attachments).toEqual([
+      { data: png, mimeType: 'image/png', name: 'shot.png' },
+    ]);
+  });
+
+  it('sends an image the phone attached with no words at all', async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7]);
+    mocks.mockSession.downloadAndDecryptAttachment.mockResolvedValue(png);
+
+    const runPromise = runAcp({
+      credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+      agentName: 'opencode',
+      command: 'opencode',
+      args: ['acp'],
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.getFileEventHandler()).toBeTypeOf('function');
+    });
+
+    mocks.getFileEventHandler()!({
+      content: { data: { ev: { t: 'file', ref: 'ref-1', name: 'shot.png', size: png.length, mimeType: 'image/png' } } },
+    });
+    await vi.waitFor(() => {
+      expect(mocks.mockSession.trackAttachmentDownload).toHaveBeenCalledTimes(1);
+    });
+
+    // No text. Before this the runner returned early and the turn never left.
+    mocks.getUserMessageHandler()!({ role: 'user', content: { type: 'text', text: '' } });
+
+    await vi.waitFor(() => {
+      expect(mocks.backendState.prompts).toHaveLength(1);
+    });
+
+    await mocks.getKillHandler()!();
+    await runPromise;
+
+    expect(mocks.backendState.prompts[0].attachments).toHaveLength(1);
+  });
+
+  it('still drops a message that carried neither words nor an image', async () => {
+    const runPromise = runAcp({
+      credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+      agentName: 'opencode',
+      command: 'opencode',
+      args: ['acp'],
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.getUserMessageHandler()).toBeTypeOf('function');
+    });
+
+    mocks.getUserMessageHandler()!({ role: 'user', content: { type: 'text', text: '' } });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    await mocks.getKillHandler()!();
+    await runPromise;
+
+    expect(mocks.backendState.prompts).toEqual([]);
   });
 
   it('registers abort handler that cancels the ACP backend session', async () => {

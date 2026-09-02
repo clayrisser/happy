@@ -23,6 +23,13 @@ import {
   type ContentBlock,
 } from '@agentclientprotocol/sdk';
 import { randomUUID } from 'node:crypto';
+import { buildAcpPromptBlocks } from './promptContent';
+import type { PendingAttachment } from '@/utils/MessageQueue2';
+import {
+  detectHarnessImageMime,
+  stageHarnessAttachments,
+  resolveHarnessAttachmentDir,
+} from '@/utils/harnessAttachments';
 import type {
   AgentBackend,
   AgentMessage,
@@ -319,6 +326,13 @@ export class AcpBackend implements AgentBackend {
   private process: ChildProcess | null = null;
   private connection: ClientSideConnection | null = null;
   private acpSessionId: string | null = null;
+  /**
+   * Whether the agent said it takes `ContentBlock::Image` in a prompt
+   * (DROVE-378). Read off the initialize response, never inferred from the
+   * agent's name: OpenCode 1.18 says yes, and an agent that says nothing is
+   * treated as no, which is what the ACP spec's baseline actually promises.
+   */
+  private promptSupportsImage = false;
   private disposed = false;
   /** Track active tool calls to prevent duplicate events */
   private activeToolCalls = new Set<string>();
@@ -771,6 +785,8 @@ export class AcpBackend implements AgentBackend {
         }
       );
       logger.debug(`[AcpBackend] Initialize completed`);
+      this.promptSupportsImage = initializeResponse.agentCapabilities?.promptCapabilities?.image === true;
+      logger.debug(`[AcpBackend] Prompt image capability for ${this.options.agentName}: ${this.promptSupportsImage}`);
       if (this.options.verbose) {
         logAcpBackendMuted(
           `Incoming initialize response from ${this.options.agentName}: ${summarizeSessionMetadataPayload(initializeResponse)}`,
@@ -1037,7 +1053,58 @@ export class AcpBackend implements AgentBackend {
   private idleResolver: (() => void) | null = null;
   private waitingForResponse = false;
 
-  async sendPrompt(sessionId: SessionId, prompt: string): Promise<void> {
+  /**
+   * Turn the queue's attachments into prompt blocks the way THIS agent takes
+   * them (DROVE-378).
+   *
+   * An agent that advertised `promptCapabilities.image` gets the bytes inline.
+   * One that did not gets the image written under the happy home dir and both
+   * a `resource_link` and a sentence naming the path, because ACP guarantees
+   * text and resource links on every agent and nothing else.
+   *
+   * A blob whose magic bytes are not an image is dropped here rather than sent
+   * as something the model will reject; the text still goes.
+   */
+  private buildPromptBlocks(prompt: string, attachments?: PendingAttachment[]): ContentBlock[] {
+    if (!attachments || attachments.length === 0) {
+      return buildAcpPromptBlocks({ text: prompt });
+    }
+
+    if (this.promptSupportsImage) {
+      const images = attachments.flatMap((att) => {
+        const mimeType = detectHarnessImageMime(att.data);
+        if (!mimeType) {
+          logger.debug(`[AcpBackend] Skipping attachment with no image magic bytes: ${att.name}`);
+          return [];
+        }
+        return [{
+          base64: Buffer.from(att.data).toString('base64'),
+          mimeType,
+          name: att.name,
+        }];
+      });
+      if (images.length > 0) {
+        return buildAcpPromptBlocks({ text: prompt, images });
+      }
+      return buildAcpPromptBlocks({ text: prompt });
+    }
+
+    const staged = stageHarnessAttachments({
+      attachments,
+      dir: resolveHarnessAttachmentDir({
+        sessionId: this.acpSessionId ?? 'unknown',
+        harness: this.options.agentName,
+      }),
+    });
+    return buildAcpPromptBlocks({ text: prompt, staged });
+  }
+
+  /** Does this agent take image blocks in a prompt? Answered by `initialize`. */
+  supportsImagePrompts(): boolean {
+    return this.promptSupportsImage;
+  }
+
+  async sendPrompt(sessionId: SessionId, prompt: string, attachments?: PendingAttachment[]): Promise<void> {
     // Check if prompt contains change_title instruction (via optional callback)
     const promptHasChangeTitle = this.options.hasChangeTitleInstruction?.(prompt) ?? false;
 
@@ -1063,17 +1130,14 @@ export class AcpBackend implements AgentBackend {
       logger.debug(`[AcpBackend] Sending prompt (length: ${prompt.length}): ${prompt.substring(0, 100)}...`);
       logger.debug(`[AcpBackend] Full prompt: ${prompt}`);
       
-      const contentBlock: ContentBlock = {
-        type: 'text',
-        text: prompt,
-      };
+      const blocks: ContentBlock[] = this.buildPromptBlocks(prompt, attachments);
 
       const promptRequest: PromptRequest = {
         sessionId: this.acpSessionId,
-        prompt: [contentBlock],
+        prompt: blocks,
       };
 
-      logger.debug(`[AcpBackend] Prompt request:`, JSON.stringify(promptRequest, null, 2));
+      logger.debug(`[AcpBackend] Prompt request: ${blocks.length} block(s), types ${blocks.map((b) => b.type).join(',')}`);
       await this.connection.prompt(promptRequest);
       logger.debug('[AcpBackend] Prompt request sent to ACP connection');
       

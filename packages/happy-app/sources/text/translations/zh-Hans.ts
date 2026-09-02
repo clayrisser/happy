@@ -1288,6 +1288,7 @@ export const zhHans: TranslationStructure = {
             : `${count} 张图片上传失败，未发送。`,
         notSupportedTitle: '不支持图片',
         notSupportedMessage: '此代理不支持图片附件。图片未发送。',
+        notSupportedFragment: '此代理无法处理图片',
         // The Add context sheet the plus opens (DROVE-128).
         addContextTitle: '添加上下文',
         sourceCamera: '相机',

@@ -1286,6 +1286,7 @@ export const it: TranslationStructure = {
             : `Non è stato possibile caricare ${count} immagini e non sono state inviate.`,
         notSupportedTitle: 'Immagini non supportate',
         notSupportedMessage: 'Questo agente non supporta gli allegati immagine. Le immagini non sono state inviate.',
+        notSupportedFragment: 'questo agente non accetta immagini',
         // The Add context sheet the plus opens (DROVE-128).
         addContextTitle: 'Aggiungi contesto',
         sourceCamera: 'Fotocamera',
