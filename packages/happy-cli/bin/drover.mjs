@@ -2,7 +2,7 @@
 
 import { spawnSync } from 'child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
-import { tmpdir } from 'os';
+import { homedir, tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import { join, dirname } from 'path';
 
@@ -89,6 +89,19 @@ if (!hasNoWarnings || !hasNoDeprecation) {
         status = 1;
         break;
       }
+      // NOTHING STARTS WHILE THE TREE IS MOVING (DROVE-369). `drover home
+      // migrate` holds ~/.drover/migrating from its writer check to its end,
+      // and cattle-drover's bin/drover refuses a typed start on it. This loop
+      // is the one start that never passes through bin/drover — a flip or a
+      // rebuilt bundle exits 75 and is respawned right here — and on the real
+      // run of 2026-09-02 a respawned child was a writer under ~/.happy and
+      // ~/.claude-shared exactly while verify hashed them.
+      const migrating = migrationInProgress();
+      if (migrating) {
+        process.stderr.write(`drover: a state migration to ~/.drover is in progress (${migrating}); this session does not ${relaunching ? 'resume' : 'start'} until it finishes. Log: ~/.drover/migrate.log\n`);
+        status = 3;
+        break;
+      }
       const env = { ...process.env, DROVER_RELAUNCH_FILE: relaunchFile };
       // Only ever set for the process we are handing a session TO, so a
       // wrapper that has never relaunched cannot waive another session's
@@ -163,4 +176,34 @@ function readRelaunchRequest(path) {
   } finally {
     try { rmSync(path, { force: true }); } catch { /* best effort */ }
   }
+}
+
+/**
+ * The migration lock cattle-drover's `drover home migrate` holds while the
+ * six state trees move under ~/.drover (DROVE-369): `<DROVER_HOME>/migrating`,
+ * `pid=`, `started=` and `by=` one per line. Read the same way etc/drover.env's
+ * drover_refuse_if_migrating reads it: a live pid means refuse, a pid that is
+ * gone means a crashed run whose lock is stepped over, no file means go.
+ * Returns a short description of the live run, or null.
+ */
+function migrationInProgress() {
+  const home = process.env.DROVER_HOME || join(homedir(), '.drover');
+  let text;
+  try {
+    text = readFileSync(join(home, 'migrating'), 'utf8');
+  } catch {
+    return null;
+  }
+  const pid = Number((/^pid=(\d+)/m.exec(text) || [])[1]);
+  const since = (/^started=(\S+)/m.exec(text) || [])[1] || '?';
+  if (pid) {
+    try {
+      process.kill(pid, 0);
+    } catch (e) {
+      // ESRCH: nothing has that pid. Anything else (EPERM) is a live process
+      // that is not ours, which is still a live process.
+      if (e && e.code === 'ESRCH') return null;
+    }
+  }
+  return `pid ${pid || '?'}, since ${since}`;
 }
