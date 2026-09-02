@@ -40,6 +40,16 @@ export interface DroverVerb {
 
 export const droverVerbs: readonly DroverVerb[] = [
     {
+        name: 'check',
+        summary: 'Refuse a tree whose header comments have become commands. The tripwire bin/drover runs before it dispatches.',
+        load: () => import('./check'),
+    },
+    {
+        name: 'daemon',
+        summary: 'The fork\'s happy-cli daemon under a supervisor: adopt the one already running, or start it.',
+        load: () => import('./daemon'),
+    },
+    {
         name: 'mcps',
         summary: 'The MCP servers and model providers each harness is configured with. Reads only.',
         load: () => import('./mcps'),
