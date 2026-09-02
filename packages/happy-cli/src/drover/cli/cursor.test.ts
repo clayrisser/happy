@@ -423,3 +423,185 @@ describe('drover cursor', () => {
         expect(desiredHooks('/r', true)).toContain('/r/adapters/cursor-permission-gate.sh');
     });
 });
+
+/**
+ * THE DIFFERENTIAL THAT WOULD HAVE CAUGHT DROVE-374's CLASS (DROVE-374).
+ *
+ * Every earlier differential in this file compares STDOUT — the help text, the
+ * `--print-hooks` block, the dry-run command line. All three passed while the
+ * node arm shipped, because none of them looks at the one thing a launcher is
+ * for: the ENVIRONMENT the harness binary is eventually handed. A launcher that
+ * dropped HOME, PATH or a credential-store variable would render an identical
+ * help page and then start a session as the wrong person, or against a locked
+ * keychain.
+ *
+ * So this one spawns a REAL stub `cursor-agent` twice — once under the
+ * environment the shell verb exports, once under the environment the node verb
+ * exports — and compares what the child recorded, key by key. The stub is a
+ * three-line shell script that writes `env` to a file; nothing here runs a real
+ * cursor-agent, reads a real credential, or touches Clay's ~/.cursor.
+ *
+ * The two arms are joined by the piece they genuinely share: `cursorTurnEnv`,
+ * the transform CursorBackend applies before every `cursor-agent` spawn. That
+ * is the whole point — the transform is common, so any difference the child
+ * sees is a difference the LAUNCHER made.
+ */
+describe('drover cursor: the environment the harness binary is handed', () => {
+    /**
+     * The shell verb's exported environment.
+     *
+     * `libexec/drover-cursor` ends in `exec node "$cli/bin/drover.mjs" cursor`,
+     * so a stub `node` first on PATH is handed exactly what the shell exported
+     * and nothing else. DROVER_ALLOW_NO_TMUX keeps it out of the pane opener.
+     */
+    function shellArmEnv(base: Record<string, string>, binDir: string): Record<string, string> {
+        const out = join(binDir, 'shell.env');
+        execFileSync('sh', [shellVerb], {
+            env: { ...base, DROVER_STUB_ENV_OUT: out },
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        return readEnvFile(out);
+    }
+
+    /** `env(1)`'s output, back as an object. */
+    function readEnvFile(path: string): Record<string, string> {
+        const env: Record<string, string> = {};
+        for (const line of readFileSync(path, 'utf8').split('\n')) {
+            const eq = line.indexOf('=');
+            if (eq > 0) env[line.slice(0, eq)] = line.slice(eq + 1);
+        }
+        return env;
+    }
+
+    /**
+     * Set by the shell that runs the stub, by node when it spawns, or by this
+     * test to find its own output. None of them is a launcher's decision, so
+     * comparing them would be comparing the harness with itself.
+     */
+    const notTheLaunchers = new Set(['_', 'PWD', 'OLDPWD', 'SHLVL', 'DROVER_STUB_ENV_OUT']);
+
+    function comparable(env: Record<string, string>): Record<string, string> {
+        return Object.fromEntries(Object.entries(env).filter(([k]) => !notTheLaunchers.has(k)));
+    }
+
+    it('is the same from the node verb as from the shell, key by key', async () => {
+        const binDir = tempDir('stubbin');
+        const home = tempDir('envhome');
+        const stateDir = join(home, 'state');
+        const cursorHome = join(home, 'cursorconf');
+        const sessionConfig = join(home, 'sessionconf');
+        mkdirSync(stateDir, { recursive: true });
+        mkdirSync(sessionConfig, { recursive: true });
+
+        // A cursor-agent that records what it was given, and a node that does
+        // the same in place of the runner the shell verb execs.
+        for (const name of ['cursor-agent', 'node']) {
+            writeFileSync(join(binDir, name), '#!/bin/sh\n/usr/bin/env > "$DROVER_STUB_ENV_OUT"\n', { mode: 0o755 });
+        }
+
+        // env -i, near enough: only what a launcher is entitled to read.
+        const base: Record<string, string> = {
+            PATH: `${binDir}:/usr/bin:/bin`,
+            HOME: home,
+            STATE_DIR: stateDir,
+            DROVER_DIR: shellRoot,
+            FORK_DIR: join(shellRoot, '..', 'happy'),
+            CURSOR_CONFIG_DIR: cursorHome,
+            DROVER_ALLOW_NO_TMUX: '1',
+        };
+
+        const shellEnv = shellArmEnv(base, binDir);
+
+        // The node verb, stopped at the same point: `launch` is where the shell
+        // exec'd, so the env it holds there is the env it would have handed on.
+        let nodeEnv: Record<string, string> = {};
+        const io: CursorIo = {
+            env: { ...base },
+            cwd: home,
+            home,
+            out: () => { /* the launch line is another test's business */ },
+            err: () => { /* ditto */ },
+            which: (name) => (existsSync(join(binDir, name)) ? join(binDir, name) : null),
+            auth: fakeAuth(),
+            pick: () => { throw new Error('the picker must not run in this test'); },
+            enter: async () => { throw new Error('this launch has a pane'); },
+            launch: async () => {
+                nodeEnv = Object.fromEntries(
+                    Object.entries(io.env).filter(([, v]) => v !== undefined),
+                ) as Record<string, string>;
+                return 0;
+            },
+            now: () => new Date(Date.UTC(2026, 8, 2, 3, 4, 5)),
+        };
+        expect(await run([], io)).toBe(0);
+
+        // The shared transform, then a REAL spawn of the stub under each.
+        const { cursorTurnEnv } = await import('@/cursor/cursorEnv');
+        const recorded: Record<string, string>[] = [];
+        for (const [tag, armEnv] of [['shell', shellEnv], ['node', nodeEnv]] as const) {
+            const out = join(binDir, `child-${tag}.env`);
+            const childEnv = cursorTurnEnv(sessionConfig, {}, armEnv) as Record<string, string>;
+            execFileSync(join(binDir, 'cursor-agent'), ['create-chat'], {
+                env: { ...childEnv, DROVER_STUB_ENV_OUT: out },
+                stdio: ['ignore', 'pipe', 'pipe'],
+            });
+            recorded.push(comparable(readEnvFile(out)));
+        }
+        const [fromShell, fromNode] = recorded;
+
+        // Key by key, and named in the failure — "the objects differ" is the
+        // report that let this ship.
+        const dropped = Object.keys(fromShell).filter((k) => !(k in fromNode));
+        const added = Object.keys(fromNode).filter((k) => !(k in fromShell));
+        const changed = Object.keys(fromShell)
+            .filter((k) => k in fromNode && fromShell[k] !== fromNode[k])
+            .map((k) => `${k}: shell=${fromShell[k]} node=${fromNode[k]}`);
+        expect({ dropped, added, changed }).toEqual({ dropped: [], added: [], changed: [] });
+
+        // And the transform is doing its job in both, rather than both being
+        // empty in the same way.
+        expect(fromShell.HOME).toBe(home);
+        expect(fromShell.CURSOR_CONFIG_DIR).toBe(sessionConfig);
+        expect(fromShell.DROVER_URL).toBe('http://127.0.0.1:7970');
+        expect(fromShell.DROVER_ORIGIN).toBe('terminal');
+        expect(fromShell.STATE_DIR).toBe(stateDir);
+    });
+
+    it('carries an account credential to the child from both arms, memory store and all', async () => {
+        // The one path that ADDS variables. `cursor_run_env` in the shell and
+        // `runEnv` here both answer CURSOR_AUTH_TOKEN + AGENT_CLI_CREDENTIAL_STORE,
+        // and the second is what keeps a managed run off the machine-wide
+        // Keychain slot — the variable whose absence would be invisible in a
+        // stdout differential and catastrophic in life.
+        const binDir = tempDir('stubacct');
+        const home = tempDir('acsthome');
+        const sessionConfig = join(home, 'sessionconf');
+        mkdirSync(join(home, 'state'), { recursive: true });
+        mkdirSync(sessionConfig, { recursive: true });
+        writeFileSync(join(binDir, 'cursor-agent'), '#!/bin/sh\n/usr/bin/env > "$DROVER_STUB_ENV_OUT"\n', { mode: 0o755 });
+
+        const h = harness({
+            env: { DROVER_DIR: shellRoot, PATH: binDir, CURSOR_API_KEY: 'inherited-and-must-not-survive' },
+            auth: fakeAuth({ work: { code: 0 } }),
+            which: (name) => (existsSync(join(binDir, name)) ? join(binDir, name) : null),
+        });
+        expect(await run(['--account', 'work'], h.io)).toBe(0);
+
+        const { cursorTurnEnv } = await import('@/cursor/cursorEnv');
+        const out = join(binDir, 'child.env');
+        const childEnv = cursorTurnEnv(sessionConfig, {}, h.io.env as Record<string, string>) as Record<string, string>;
+        execFileSync(join(binDir, 'cursor-agent'), ['create-chat'], {
+            env: { ...childEnv, DROVER_STUB_ENV_OUT: out },
+            stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        const child = readEnvFile(out);
+
+        expect(child.AGENT_CLI_CREDENTIAL_STORE).toBe('memory');
+        expect(child.DROVER_ACCOUNT).toBe('work');
+        expect(child.DROVER_HARNESS).toBe('cursor');
+        // An inherited key never reaches the child: cursorTurnEnv scrubs the
+        // identity variables, and the launcher unset this one before that.
+        expect(child.CURSOR_API_KEY).toBeUndefined();
+    });
+});

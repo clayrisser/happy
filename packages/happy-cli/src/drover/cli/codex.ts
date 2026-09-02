@@ -44,6 +44,7 @@ import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
 import { droverEnv } from './env';
+import { guardHarness } from './harness/failure';
 import { droverTmuxHavePane, type Env } from './harness/tmuxEntry';
 import { defaultIo, reenterLine, runEnter, type EnterIo } from './harness/tmuxEnter';
 
@@ -123,11 +124,15 @@ export function defaultCodexIo(): CodexIo {
             const { droverDir } = droverEnv(process.env, homedir());
             return runEnter(argv, io, join(droverDir, 'libexec'));
         },
-        launch: async (argv) => {
+        // WITH THE CATCH THE ARM IT REPLACED HAD (DROVE-374). src/index.ts
+        // wrapped handleCodexCommand in a try/catch that printed one line and
+        // exited 1. The port dropped it, so anything thrown out of the runner
+        // reached the terminal as an unhandled rejection and a raw node stack.
+        launch: async (argv) => guardHarness('codex', (line) => process.stderr.write(`${line}\n`), async () => {
             const { handleCodexCommand } = await import('../../commands/codexCommand');
             await handleCodexCommand(argv);
             return 0;
-        },
+        }),
     };
 }
 
