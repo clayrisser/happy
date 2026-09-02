@@ -7,16 +7,16 @@
  * a group on the session info screen, and a card in the longhorn's inbox — and
  * all three render THIS, off the derivation in utils/sessionTasks.
  *
- * The empty case is a sentence, never a blank box. That is the whole of the
- * screenshot on the ticket: a black screen with nothing on it tells you
- * nothing about whether the list is empty or the app is broken.
+ * The empty case says something, never a blank box: a black screen with
+ * nothing on it tells you nothing about whether the list is empty or the app
+ * is broken. One fragment is enough to say it (DROVE-359).
  */
 import * as React from 'react';
 import { Text, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { useSession } from '@/sync/storage';
-import { deriveSessionTasks, type SessionTask, type SessionTasks } from '@/utils/sessionTasks';
+import { deriveSessionTasks, noTasksHeadline, type SessionTask, type SessionTasks } from '@/utils/sessionTasks';
 
 /**
  * The live list for one session, straight off the store.
@@ -87,11 +87,10 @@ export function SessionTasksList({ tasks }: { tasks: SessionTasks }) {
                     ...Typography.default(),
                 }}
             >
-                {/* Said in full, and saying what would fill it (DROVE-192).
-                    "No tasks yet" on its own reads like a failure to load, and
-                    leaves you with nothing to do about it. */}
-                No task list yet. Claude writes one when it plans multi-step
-                work, and this session has not.
+                {/* The same fragment the watch and the summary use, so
+                    three surfaces cannot word this differently. The sentence
+                    that followed it explained TodoWrite (DROVE-359). */}
+                {noTasksHeadline}
             </Text>
         );
     }

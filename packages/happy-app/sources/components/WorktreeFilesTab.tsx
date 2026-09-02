@@ -25,7 +25,7 @@ import {
     type DroverFileRead,
     type DroverFilesList,
 } from '@/sync/machineFiles';
-import { breadcrumb, fileNotes, fileSizeLabel, joinRel, parentRel } from '@/utils/worktreeSheetTabs';
+import { breadcrumb, fileNotes, fileSizeLabel, joinRel, noMachineTrouble, parentRel } from '@/utils/worktreeSheetTabs';
 import {
     filesCrumbHeight,
     filesRowHeight,
@@ -167,7 +167,7 @@ export function WorktreeFilesTab(props: WorktreeFilesTabProps) {
         setListing(null);
         setTrouble(null);
         if (!machineId) {
-            setTrouble('This session is not on a machine the app knows.');
+            setTrouble(noMachineTrouble);
             return;
         }
         let cancelled = false;
@@ -228,7 +228,7 @@ export function WorktreeFilesTab(props: WorktreeFilesTabProps) {
             ) : listing === null ? (
                 <View style={styles.loading}><ActivityIndicator /></View>
             ) : listing.entries.length === 0 ? (
-                <Text style={styles.empty}>An empty directory.</Text>
+                <Text style={styles.empty}>Nothing here</Text>
             ) : listing.entries.map((entry) => (
                 <Pressable
                     key={entry.name}
@@ -273,7 +273,7 @@ function FileView(props: { boxHeight: number; read: DroverFileRead | null; troub
                 ) : !read ? (
                     <View style={styles.loading}><ActivityIndicator /></View>
                 ) : read.binary ? (
-                    <Text style={styles.trouble}>A binary file. The drover does not send those.</Text>
+                    <Text style={styles.trouble}>Binary file, not shown</Text>
                 ) : (
                     <ScrollView style={{ height: boxHeight }} contentContainerStyle={styles.boxContent} nestedScrollEnabled>
                         {lines.map((line, i) => (

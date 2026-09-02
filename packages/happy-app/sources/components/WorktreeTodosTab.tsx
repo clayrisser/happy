@@ -191,11 +191,10 @@ export function WorktreeTodosTab({ sessionId }: { sessionId: string }) {
                     {todos.length === 0 ? 'NEEDS YOU' : todos.length === 1 ? 'NEEDS YOU · 1' : `NEEDS YOU · ${todos.length}`}
                 </Text>
                 {todos.length === 0 ? (
-                    <Text style={styles.empty}>
-                        {/* Said in full, and saying what would fill it (DROVE-192). */}
-                        Nothing is waiting on you. An agent raises one with `drover needs`,
-                        and it shows here until you mark it done.
-                    </Text>
+                    /* One fragment, the same one the inbox screen shows
+                       (DROVE-359). The paragraph that was here explained
+                       `drover needs` to the person least able to run it. */
+                    <Text style={styles.empty}>Nothing waiting</Text>
                 ) : todos.map((entry) => (
                     <TodoCard key={entry.requestId} entry={entry} />
                 ))}

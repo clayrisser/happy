@@ -5,6 +5,8 @@ import { AUTO_ACCEPT_SUBTITLE } from '../components/autoAcceptRow';
 import { MODE_COPY } from '../sync/droverChannels';
 import { accountGroupFooter, addAccountStatus } from '../sync/machineAccountsFlow';
 import { mcpOnlyFooter } from '../sync/mcpText';
+import { noTasksHeadline } from '../utils/sessionTasks';
+import { noMachineTrouble, paneStatus, paneTrouble } from '../utils/worktreeSheetTabs';
 
 /**
  * COPY DENSITY (DROVE-346).
@@ -37,6 +39,16 @@ import { mcpOnlyFooter } from '../sync/mcpText';
  */
 const subtitleMaxChars = 40;
 const footerMaxChars = 48;
+/**
+ * Empty states sit on the same 40, and DROVE-359 is why they are named here
+ * at all. The sheet DROVE-330 built came in after this sweep and every empty
+ * state on it was a paragraph — the Todos tab explained `drover needs` to the
+ * person holding a phone, the inbox screen ran five lines under a tick — and
+ * this file passed the whole time, because none of it is a `subtitle=`.
+ * An empty state is a row's copy in a different position, so it gets the
+ * row's bar: "Nothing waiting" and "No worktrees" already lived under it.
+ */
+const emptyStateMaxChars = 40;
 
 /**
  * Strings this rule does NOT govern, and why each one is out.
@@ -76,6 +88,25 @@ function tsxFiles(dir: string, found: string[] = []): string[] {
 /** `subtitle="..."` / `footer="..."` / `note="..."` as written in the JSX. */
 const literal = /\b(subtitle|footer|note)\s*=\s*"([^"]+)"/g;
 
+/**
+ * THE HOLE DROVE-359 CLOSED.
+ *
+ * An empty state is not an attribute. It is the text BETWEEN the tags —
+ * `<Text style={styles.empty}>Nothing waiting</Text>` — so the scan above
+ * walked straight past every one of them, reported its thirty-odd rows, and
+ * went green over the worst copy in the app.
+ *
+ * The style is the classifier, and it is a fair one: a string drawn under a
+ * style whose name starts with `empty` or `trouble` IS an empty state, said
+ * by the person who wrote the style. Anything with a `{` in it is an
+ * expression — a translation key, a variable, a bus error passed through —
+ * and not copy this file is entitled to judge.
+ */
+const emptyChild = /<Text\b[^>]*\bstyles\.(?:empty|trouble)[A-Za-z]*\b[^>]*>([\s\S]*?)<\/Text>/g;
+
+/** `{/* ... *\/}` inside a Text child: a comment, not copy. */
+const jsxComment = /\{\/\*[\s\S]*?\*\/\}/g;
+
 type Row = { kind: string; text: string; where: string };
 
 function renderedLiterals(): Row[] {
@@ -83,7 +114,8 @@ function renderedLiterals(): Row[] {
     for (const file of tsxFiles(sourcesDir)) {
         const rel = path.relative(sourcesDir, file);
         if (rel.startsWith(path.join('app', '(app)', 'dev'))) continue;
-        const lines = fs.readFileSync(file, 'utf8').split('\n');
+        const source = fs.readFileSync(file, 'utf8');
+        const lines = source.split('\n');
         lines.forEach((line, i) => {
             for (const m of line.matchAll(literal)) {
                 const text = m[2];
@@ -91,6 +123,16 @@ function renderedLiterals(): Row[] {
                 rows.push({ kind: m[1], text, where: `${rel}:${i + 1}` });
             }
         });
+        for (const m of source.matchAll(emptyChild)) {
+            const body = m[1].replace(jsxComment, '');
+            // An expression, not copy. See `emptyChild`.
+            if (/[{<]/.test(body)) continue;
+            // JSX collapses the wrapping the source is written with.
+            const text = body.replace(/\s+/g, ' ').trim();
+            if (!text || upstreamCopy.has(text)) continue;
+            const before = source.slice(0, m.index ?? 0);
+            rows.push({ kind: 'empty', text, where: `${rel}:${before.split('\n').length}` });
+        }
     }
     return rows;
 }
@@ -106,7 +148,7 @@ describe('copy density', () => {
 
     it('no subtitle exceeds one short fragment', () => {
         const tooLong = rows
-            .filter((r) => r.kind !== 'footer' && r.text.length > subtitleMaxChars)
+            .filter((r) => (r.kind === 'subtitle' || r.kind === 'note') && r.text.length > subtitleMaxChars)
             .map((r) => `${r.where} (${r.text.length}) "${r.text}"`);
         expect(tooLong).toEqual([]);
     });
@@ -116,6 +158,34 @@ describe('copy density', () => {
             .filter((r) => r.kind === 'footer' && r.text.length > footerMaxChars)
             .map((r) => `${r.where} (${r.text.length}) "${r.text}"`);
         expect(tooLong).toEqual([]);
+    });
+
+    // The three below are the empty-state half (DROVE-359). Split into
+    // separate its so a failure names WHICH rule was broken, because "too
+    // long" and "two sentences" get fixed differently.
+
+    it('finds the empty states the attribute scan could not see', () => {
+        const empties = rows.filter((r) => r.kind === 'empty');
+        expect(empties.length).toBeGreaterThan(5);
+        // The sheet's own, so a rename cannot quietly drop it from the scan.
+        expect(empties.map((r) => r.text)).toContain('Nothing waiting');
+    });
+
+    it('no empty state exceeds one short fragment', () => {
+        const tooLong = rows
+            .filter((r) => r.kind === 'empty' && r.text.length > emptyStateMaxChars)
+            .map((r) => `${r.where} (${r.text.length}) "${r.text}"`);
+        expect(tooLong).toEqual([]);
+    });
+
+    it('no empty state runs to a second sentence or spells out a command', () => {
+        const preachy = rows
+            .filter((r) => r.kind === 'empty')
+            // A sentence break inside it, a full stop closing it, or a
+            // backticked command: the three shapes DROVE-346 scribbled out.
+            .filter((r) => /[.!?]\s/.test(r.text) || /\.$/.test(r.text) || r.text.includes('`'))
+            .map((r) => `${r.where} "${r.text}"`);
+        expect(preachy).toEqual([]);
     });
 });
 
@@ -212,5 +282,51 @@ describe('copy density: generated strings', () => {
         expect(footer).not.toMatch(/not built/);
         expect(mcpOnlyFooter({ ...harness, configured: false }).length)
             .toBeLessThanOrEqual(footerMaxChars);
+    });
+
+    /**
+     * The worktrees sheet's built copy (DROVE-359).
+     *
+     * `paneTrouble` lives in a `.ts`, so it is not JSX and the scan above
+     * cannot reach it however the classifier is written. Pinned by value, the
+     * way the auto-accept subtitle is.
+     */
+    it('every pane refusal is one fragment, and each says its own thing', () => {
+        const keys = ['no pane', 'no live session in that worktree', 'no such session'];
+        const lines = keys.map(paneTrouble);
+        for (const line of lines) {
+            expect(line.length, `"${line}"`).toBeLessThanOrEqual(emptyStateMaxChars);
+            expect(line, `"${line}"`).not.toMatch(/[.!?]\s/);
+            expect(line, `"${line}"`).not.toMatch(/\.$/);
+        }
+        // Short is not the same as interchangeable: three refusals that read
+        // alike leave you unable to tell which one you are looking at.
+        expect(new Set(lines).size).toBe(keys.length);
+        expect(noMachineTrouble.length).toBeLessThanOrEqual(emptyStateMaxChars);
+    });
+
+    it('a bus error the app has no line for is handed through untouched', () => {
+        const raw = 'The drover bus is not running on this machine (drover bus).';
+        expect(paneTrouble(raw)).toBe(raw);
+    });
+
+    it('the terminal status line stays a status line', () => {
+        const waiting = paneStatus({ scopeLabel: '~/wt/x', pane: null, troubled: false });
+        expect(waiting).toBe('~/wt/x · capturing');
+        // A trouble line is under the box already; repeating "capturing"
+        // above it would say the app is still trying when it is not.
+        expect(paneStatus({ scopeLabel: '~/wt/x', pane: null, troubled: true })).toBe('~/wt/x');
+        expect(paneStatus({
+            scopeLabel: '~/wt/x',
+            pane: { pane: '%3', age: '2s', redacted: 2 },
+            troubled: false,
+        })).toBe('~/wt/x · pane %3 · 2s ago · 2 masked');
+    });
+
+    it('the empty task list is one fragment, and the same one everywhere', () => {
+        // The list is drawn in three places off SessionTasksList, so the
+        // headline and the empty view have to be the one string.
+        expect(noTasksHeadline.length).toBeLessThanOrEqual(emptyStateMaxChars);
+        expect(noTasksHeadline).not.toMatch(/[.!?]/);
     });
 });
