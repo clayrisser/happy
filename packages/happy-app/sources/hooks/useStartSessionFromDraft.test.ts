@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
     alert: vi.fn(),
     confirm: vi.fn(),
     delay: vi.fn(),
+    setSessionEnabled: vi.fn(),
     uuidCount: 0,
 }));
 
@@ -78,6 +79,14 @@ vi.mock('@/hooks/useNewSessionDraft', () => ({
 
 vi.mock('@/hooks/useNavigateToSession', () => ({
     useNavigateToSession: () => mocks.navigateToSession,
+}));
+
+// The real service reaches react-native, which vitest cannot parse; the hook
+// only spends the sheet's speaker through setSessionEnabled (DROVE-394).
+vi.mock('@/voice/readAloudService', () => ({
+    readAloud: {
+        setSessionEnabled: mocks.setSessionEnabled,
+    },
 }));
 
 vi.mock('@/utils/machineUtils', () => ({
