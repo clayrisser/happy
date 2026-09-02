@@ -145,7 +145,10 @@ function mountField() {
         ref.current?.setTextAndSelection(text, { start: text.length, end: text.length });
     });
 
-    return { ref, field, fieldHeight, bubbleHeight, measures, types, writes };
+    /** What the field holds now, the way `getComposerText` reads it. */
+    const value = () => ref.current?.getText() ?? '';
+
+    return { ref, field, fieldHeight, bubbleHeight, measures, types, writes, value };
 }
 
 /**
@@ -159,6 +162,7 @@ function mountField() {
 function micDriving(composer: ReturnType<typeof mountField>, base = '') {
     return dictationComposerEvents({
         base: () => base,
+        current: () => composer.value(),
         setComposerText: (text) => composer.writes(text),
         send: () => composer.writes(''),
         onError: () => {},

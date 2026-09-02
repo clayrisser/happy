@@ -129,6 +129,11 @@ export class HeadlessDictation implements HeadlessDictationPort {
             // it that can drift.
             dictationComposerEvents({
                 base: () => this.base,
+                // The draft IS this capture's composer, so it is what gets
+                // asked whether dictation still owns what it wrote
+                // (DROVE-360). Nothing is on screen to type into here, but a
+                // draft the user edited on another screen is the same claim.
+                current: () => (this.into === null ? '' : this.deps.draft(this.into)),
                 setComposerText: (text) => {
                     if (this.into !== null) this.deps.setDraft(this.into, text);
                 },

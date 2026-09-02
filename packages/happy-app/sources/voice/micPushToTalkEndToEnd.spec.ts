@@ -118,6 +118,7 @@ function harness(base = '') {
     const states: MicButtonState[] = [];
     const capture = new DictationCapture(engine, dictationComposerEvents({
         base: () => draft,
+        current: () => composer,
         setComposerText: (text) => { composer = text; },
         send: () => { sends += 1; },
         onError: (message) => { errors.push(message); },

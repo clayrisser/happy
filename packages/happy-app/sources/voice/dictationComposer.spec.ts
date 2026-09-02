@@ -58,6 +58,7 @@ function harness(base: string) {
     const errors: string[] = [];
     const capture = new DictationCapture(engine, dictationComposerEvents({
         base: () => baseDraft,
+        current: () => composer,
         setComposerText: (text) => { composer = text; },
         send: () => { sends += 1; },
         onError: (message) => errors.push(message),

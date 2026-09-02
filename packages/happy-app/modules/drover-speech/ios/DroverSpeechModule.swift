@@ -283,8 +283,13 @@ public final class DroverSpeechModule: Module {
         // one, and writing it over the live utterance is the whole bug.
         guard !incoming.isEmpty else { return }
         let start = transcription.segments.first?.timestamp ?? 0
+        // Whether Apple's clock was ALREADY running when the live utterance's
+        // offset was recorded (DROVE-360). Read before the flag is set, and
+        // that ordering is the whole point: the first result ever to wind the
+        // clock cannot be judged against a baseline taken while it read zero.
+        let clockAlreadySeen = segmentClockSeen
         if start > 0 { segmentClockSeen = true }
-        if startsNewUtterance(incoming, at: start) {
+        if startsNewUtterance(incoming, at: start, clocked: clockAlreadySeen) {
             bankedTranscript = latestTranscript
             taskTranscript = ""
         }
@@ -294,7 +299,30 @@ public final class DroverSpeechModule: Module {
 
     /// Whether this result opens a LATER utterance rather than revising the
     /// live one (DROVE-263).
-    private func startsNewUtterance(_ incoming: String, at start: TimeInterval) -> Bool {
+    ///
+    /// `clocked` says whether Apple's segment clock was already running when
+    /// `liveUtteranceStart` was recorded (DROVE-360). It is NOT the same
+    /// question as `segmentClockSeen`, and reading the flag here instead of
+    /// taking this argument is what wrote Clay's sentence into the composer
+    /// twice.
+    ///
+    /// The on-device recogniser reports a DEAD clock on its partials — every
+    /// partial's first segment sits at 0.0 — and winds a real one only on the
+    /// FINAL result of the utterance. So the final was the first result ever
+    /// to satisfy `start > 0`. It flipped `segmentClockSeen` true on its way
+    /// in, then compared its own honest offset against a `liveUtteranceStart`
+    /// of 0 recorded when there was no clock at all, read 0.53 > 0.01, and
+    /// declared itself a new utterance. `absorb` banked the sentence and set
+    /// `taskTranscript` to the same sentence, so `latestTranscript` went out
+    /// as that sentence twice, on the partial event, at the exact moment he
+    /// stopped talking. Which is what he saw.
+    ///
+    /// A baseline is only a baseline if it was measured on the same clock.
+    private func startsNewUtterance(
+        _ incoming: String,
+        at start: TimeInterval,
+        clocked: Bool
+    ) -> Bool {
         let live = taskTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         // Nothing said yet in this utterance, so there is nothing to protect.
         guard !live.isEmpty else { return false }
@@ -302,7 +330,7 @@ public final class DroverSpeechModule: Module {
         // re-reports the same utterance from the same offset, so only a
         // STRICTLY later start is a new utterance; ties and rewinds are
         // revisions. This is the path that carries a real device.
-        if segmentClockSeen, liveUtteranceStart >= 0 {
+        if clocked, liveUtteranceStart >= 0 {
             return start > liveUtteranceStart + 0.01
         }
         // No clock, so only the words are left. A revision restates the

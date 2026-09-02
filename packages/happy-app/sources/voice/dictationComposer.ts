@@ -92,6 +92,13 @@ export const dictationEndReasons = Object.keys(dictationRestoresDraft) as Dictat
 export interface DictationComposerPort {
     /** What the composer held when the mic opened. Partials re-join onto it. */
     base(): string;
+    /**
+     * What the composer holds RIGHT NOW, read live (DROVE-360).
+     *
+     * `base()` is a snapshot and cannot answer "has he touched this since?".
+     * This can, and that question is the whole of the ownership rule below.
+     */
+    current(): string;
     /** Replace the composer's text. */
     setComposerText(text: string): void;
     /** Send what the composer now holds. */
@@ -108,23 +115,78 @@ export interface DictationComposerPort {
  * that can drift from the hook.
  */
 export function dictationComposerEvents(port: DictationComposerPort): DictationCaptureEvents {
+    /**
+     * The span dictation owns: exactly the string it last wrote into the
+     * composer, or null before it has written anything this capture
+     * (DROVE-360).
+     *
+     * DICTATION OWNS ONE REPLACEABLE RANGE, and this is it. Every partial and
+     * every final REPLACES that range; nothing appends to it. The moment the
+     * composer no longer reads back as this string, the user has typed into it
+     * or edited a word, the range stopped being dictation's, and a late
+     * transcript may not have it back.
+     *
+     * WHY A LIVE READ AND NOT A REASON CODE. `onCommit` already skipped the
+     * write for reason `typed`, which is the interrupt route the keyboard
+     * fires. It does not cover the route Clay actually hit: he taps stop, the
+     * mic closes, and `stopDictation` settles its final up to two seconds
+     * later (it waits for Apple's final result and falls back on a 2s
+     * timeout). He is editing a word inside that window, the late commit
+     * rewrites the whole field from the stale `base()`, and the caret snaps to
+     * the end — "sometimes I'll stop talking and then try to edit a word and
+     * it jumps like that and messes up the word I'm trying to edit". No reason
+     * code can see that, because the capture has already ended and nothing
+     * told it. The composer itself is the only witness, so the composer is
+     * asked.
+     */
+    let written: string | null = null;
+    /** Whether the last state we saw was a running capture. */
+    let capturing = false;
+
+    /** Is the composer still holding exactly what dictation put there? */
+    const owned = (): boolean => written === null || port.current() === written;
+
+    /** Replace the owned span, and remember what we left behind. */
+    const replace = (text: string): void => {
+        port.setComposerText(text);
+        written = text;
+    };
+
     return {
         onPartial: (text) => {
-            port.setComposerText(joinDictation(port.base(), text));
+            if (!owned()) return;
+            replace(joinDictation(port.base(), text));
         },
         onCommit: (text, shouldSend, reason) => {
             // Typing means the user is already editing over the partial;
-            // rewriting it would eat the keystroke.
-            if (reason !== 'typed') port.setComposerText(joinDictation(port.base(), text));
+            // rewriting it would eat the keystroke. `owned()` catches the
+            // slower version of the same thing: an edit made after the mic
+            // closed, while the final was still settling (DROVE-360).
+            if (reason !== 'typed' && owned()) replace(joinDictation(port.base(), text));
+            // The send still goes. Only a LIFT sends, and a finger on the
+            // button is not a finger editing a word, so a send that reaches
+            // here was asked for however the text got where it is.
             if (shouldSend) port.send();
         },
         onDiscard: (reason) => {
             // The invariant: a capture ending keeps what is on screen. Only
             // the named exception in `dictationRestoresDraft` takes it back.
             if (!dictationRestoresDraft[reason]) return;
-            port.setComposerText(port.base());
+            // And it only takes back a span dictation still owns. A cancel
+            // that landed after he started typing would otherwise put the
+            // pre-mic draft over his keystrokes.
+            if (!owned()) return;
+            replace(port.base());
         },
         onError: (message) => port.onError(message),
-        onChange: (state) => port.onChange(state),
+        onChange: (state) => {
+            // A capture STARTING is the one thing that hands the range back to
+            // dictation. Not a capture ending: the final for the capture that
+            // just ended is still in flight, and forgetting what we wrote is
+            // exactly how it would get to overwrite an edit.
+            if (state.active && !capturing) written = null;
+            capturing = state.active;
+            port.onChange(state);
+        },
     };
 }
