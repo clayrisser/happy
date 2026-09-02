@@ -59,6 +59,8 @@ interface ReaderView {
     isEnabled: boolean;
     focusedSessionId: string | null;
     isMicHeld: boolean;
+    /** He is holding it (DROVE-233). Read every tick, never cached. */
+    isPaused: boolean;
     /** Anything still to be said, in flight or queued (DROVE-174). */
     speechPending: boolean;
     /** Say this ahead of the transcript (DROVE-188). */
@@ -79,6 +81,12 @@ class AudioCueService {
         // gap between two sentences is not one. The reader is the only thing
         // that knows a sentence is queued but not yet started.
         speechPending: () => this.reader?.speechPending === true,
+        // A PAUSE IS SILENCE (DROVE-354). Asked at play time, in the mixer,
+        // because the cues arrive from more places than this file's own tick:
+        // `titleFor` fires an event straight off the message path, and the
+        // reader keeps ingesting messages for the focused session while he is
+        // paused. A gate on the poller alone would leave that door open.
+        paused: () => this.reader?.isPaused === true,
     });
     private readonly titles = new SpokenTitleTracker();
     private readonly gates = new GateSpeechTracker();
@@ -244,6 +252,28 @@ class AudioCueService {
                     this.gates.reset();
                 }
                 if (this.armedAt !== idleTickMs) this.arm(idleTickMs);
+                return;
+            }
+            // HE IS HOLDING IT (DROVE-354). Read-aloud is still on and the
+            // session is still his, so none of the teardown above applies:
+            // the warmed players stay warm, the spoken-gate tracker keeps its
+            // memory, and a resume is a resume rather than a fresh start.
+            //
+            // The mixer is still TICKED, and that is the point of the branch
+            // rather than a bare `return`. Ticking is what DROPS what arrived
+            // while he was paused; skipping it would leave a cue sitting in
+            // the queue to be played by the first tick after the resume,
+            // which is the burst this ticket exists to stop.
+            //
+            // The state is deliberately not re-read and the gates are not
+            // spoken. Both describe a session he has asked to stop hearing
+            // about, and a gate raised and answered inside the pause is a
+            // thing he was never going to be told — dropped, like the cues,
+            // rather than saved up. The slow clock because nothing here is
+            // waiting on a gap to open.
+            if (reader?.isPaused === true) {
+                if (this.armedAt !== idleTickMs) this.arm(idleTickMs);
+                this.mixer.tick();
                 return;
             }
             if (!this.wasReading) {
