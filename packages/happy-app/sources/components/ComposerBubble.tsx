@@ -11,8 +11,8 @@ import {
     COMPOSER_BUBBLE_SPACER_GEOMETRY,
     COMPOSER_BUBBLE_SURFACE,
     COMPOSER_BUBBLE_TEXT_ROW_GEOMETRY,
-    COMPOSER_BUBBLE_TEXT_ROW_SURFACE,
     resolveComposerBubbleSurfaceStyle,
+    resolveComposerShellInteractive,
 } from './composerBubbleLayout';
 
 /**
@@ -41,8 +41,9 @@ import {
  * THE TREE IS `composerBubbleLayout.ts`'S, resolved by the layout engine
  * rather than restated here (DROVE-214):
  *
- *   shell         column, padding `bubbleInset`, gap `controlGap`, calm glass
- *     textRow     interactive glass — the bubble's press target (DROVE-343)
+ *   shell         column, padding `bubbleInset`, gap `controlGap`, glass that
+ *                 asks UIKit for the press only while the text row is held
+ *     textRow     a plain view — the bubble's press target, drawing nothing
  *     actionRow   leading ‖ gap ‖ controls ‖ gap ‖ spacer ‖ trailing…
  *
  * WHY THE GAPS ARE CHILDREN rather than the row's `gap` property is on
@@ -152,6 +153,27 @@ export function ComposerBubble({
      * to hold a swell that is not drawn.
      */
     const material = useGlassChromeMaterial();
+    /**
+     * WHETHER A FINGER IS ON THE TEXT ROW RIGHT NOW (DROVE-343, second pass).
+     *
+     * The shell's `isInteractive` follows it, so the bubble lenses and swells
+     * under a press on the field and stays still under a press on the `+` or
+     * the capsule. The handlers are on the text row's own view and nowhere
+     * else, which is what makes a control press unable to set it.
+     *
+     * `onTouchStart` rather than a `Pressable`: the field is a `TextInput` and
+     * takes the responder for itself, so a wrapping pressable would never see
+     * the press. Touch events are dispatched along the path regardless of who
+     * owns the responder, which is the one hook a text field leaves open.
+     *
+     * NOTHING MOUNTS OR UNMOUNTS FOR THIS. It is a prop on a view that is
+     * already there, which is DROVE-286's rule: the press stream must never
+     * ride a view the state can unmount, and the alternative — swapping a
+     * glass host in on press — would do exactly that under the finger.
+     */
+    const [pressedTarget, setPressedTarget] = React.useState<'textRow' | null>(null);
+    const releaseTextRow = React.useCallback(() => setPressedTarget(null), []);
+    const holdTextRow = React.useCallback(() => setPressedTarget('textRow'), []);
     const gapped: React.ReactNode[] = [];
     (trailing ?? []).forEach((node, index) => {
         if (!node) return;
@@ -169,6 +191,12 @@ export function ComposerBubble({
             // shell carried it a press on the `+` or on the capsule swelled the
             // whole bubble. The press is the text row's below.
             {...COMPOSER_BUBBLE_SURFACE}
+            // THE PRESS, AND ONLY FOR THE FIELD (DROVE-343). `isInteractive`
+            // is a property of the effect VIEW and answers every touch inside
+            // it, so it cannot be scoped to a region — but it can be scoped in
+            // TIME. It goes on when the text row is held and off when it is
+            // released, and a touch that starts on a control never turns it on.
+            interactive={resolveComposerShellInteractive(pressedTarget)}
             style={[
                 styles.shell,
                 style,
@@ -189,17 +217,26 @@ export function ComposerBubble({
             {above}
             {/* THE TEXT ROW, AND THE BUBBLE'S PRESS TARGET (DROVE-343). Clay:
                 "The input box should only get the touch effect when I'm
-                touching where the text is." Nested glass over the shell's own
-                draws as nothing at rest, which is DROVE-254's finding used
-                rather than fought: a capsule has to read as an object and the
-                field's own area must not. */}
-            <MobileGlassSurface
-                enabled={enabled}
-                {...COMPOSER_BUBBLE_TEXT_ROW_SURFACE}
+                touching where the text is."
+
+                IT DRAWS NOTHING. The first pass gave it a nested
+                `MobileGlassSurface` on the reasoning that glass inside glass
+                has nothing left to refract (DROVE-254). The EFFECT does not,
+                but the surface also paints `chromeGlassTint` — DROVE-171's
+                tint, chosen so the composer separates from the chat behind it
+                — and a white gradient over that, and a view mounted at rest
+                draws at rest. Clay, on OTA 01a05f69: "What the hell happened
+                here?" over a lighter panel filling the field. So this is a
+                plain view again, and the press it owns is spent on the shell
+                above for the length of the touch. */}
+            <View
                 style={[styles.textRow, fieldStyle]}
+                onTouchStart={holdTextRow}
+                onTouchEnd={releaseTextRow}
+                onTouchCancel={releaseTextRow}
             >
                 {children}
-            </MobileGlassSurface>
+            </View>
             {overlay}
             {showActionRow ? (
                 <Animated.View style={[styles.actionRow, actionRowStyle]}>

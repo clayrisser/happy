@@ -130,14 +130,11 @@ export function resolveComposerBubbleTextRowGeometry(): ComposerBubbleStyle {
         paddingBottom: MOBILE_COMPOSER_METRICS.inputPaddingBottom,
         paddingLeft: 0,
         paddingRight: 0,
-        // THE ROW IS A SURFACE NOW, SO IT HAS A SHAPE (DROVE-343). It is the
-        // bubble's press target, which means it swells, and a rectangle
-        // swelling inside a 30pt-rounded shell would show its corners crossing
-        // the shell's arc. `shellRadius - bubbleInset` is the shell's own arc
-        // offset inward by the padding between them — the concentric radius,
-        // derived rather than picked, so the two curves stay parallel at every
-        // text height.
-        borderRadius: MOBILE_COMPOSER_METRICS.shellRadius - MOBILE_COMPOSER_METRICS.bubbleInset,
+        // NO RADIUS. The first pass at DROVE-343 gave the row a concentric
+        // one, because it was a surface then and a rectangle swelling inside a
+        // 30pt-rounded shell would cross its arc. The row draws nothing at rest
+        // now, so a radius here rounds nothing; the shell's own arc is the only
+        // curve in the bubble again.
         minHeight: MOBILE_COMPOSER_TEXT_ROW_BASE_HEIGHT,
         maxHeight: MOBILE_COMPOSER_METRICS.inputMaxHeight
             + MOBILE_COMPOSER_METRICS.inputPaddingTop
@@ -264,11 +261,16 @@ export function resolveComposerBubbleDiscGeometry(): ComposerBubbleStyle {
  *
  * There is no per-region switch on the effect. Its interaction sees every
  * touch delivered inside its `contentView`, and every control in the composer
- * mounts there. So the press moved rather than being filtered: the SHELL is
- * calm glass, and the bubble's press target is the text row, which carries
- * `COMPOSER_BUBBLE_TEXT_ROW_SURFACE` below. Every other press in the composer
- * already belongs to a surface of its own — the discs since DROVE-266, the
- * capsule since DROVE-343 — so nothing is left for the shell to answer.
+ * mounts there. So `interactive` is not a constant of the surface any more: it
+ * is decided per press by `resolveComposerShellInteractive` below, true only
+ * while a finger is on the text row. Every other press in the composer already
+ * belongs to a surface of its own — the discs since DROVE-266, the capsule
+ * since DROVE-343 — so a control press leaves the shell calm and nothing is
+ * left for it to answer.
+ *
+ * The first pass gave the text row a nested surface instead, and a surface
+ * mounted at rest DRAWS at rest: Clay photographed the field as a lighter
+ * panel. `resolveComposerShellInteractive` carries that whole argument.
  *
  * WHAT THE BARE GLYPHS LOSE, said plainly. Send and the mic at rest have no
  * surface (DROVE-254, DROVE-264) and drew the bubble's swell. With the shell
@@ -317,28 +319,42 @@ export function resolveComposerBubbleSurfaceStyle(drawsNativeGlass: boolean) {
 }
 
 /**
- * THE BUBBLE'S PRESS TARGET: the text row, and only the text row (DROVE-343).
+ * THE BUBBLE'S PRESS TARGET IS THE TEXT ROW, AND THE TEXT ROW DRAWS NOTHING
+ * (DROVE-343, second pass).
  *
- * Clay: "The input box should only get the touch effect when I'm touching
- * where the text is." So the interactive glass is the frame the text is in.
- * The material is the same one the shell wears — the same `liquid`, the same
- * `regular` — because a nested glass effect over the shell's own has nothing
- * left to refract and draws as nothing, which is exactly what is wanted here:
- * invisible at rest, and the platform's own lens and swell under a finger.
+ * THE FIRST PASS PUT A SURFACE THERE AND IT WAS VISIBLE. It gave the text row
+ * its own `liquid`/`regular` `MobileGlassSurface`, on the reasoning that a
+ * glass effect nested in the shell's own has nothing left to refract and so
+ * draws as nothing — DROVE-254's finding, used rather than fought. The
+ * reasoning was about the EFFECT and the surface is more than the effect:
+ * `MobileGlassSurface` also paints `chromeGlassTint` on it (DROVE-171, a tint
+ * chosen precisely so the composer SEPARATES from the chat behind it) and a
+ * full-bleed white `LinearGradient` over that. On OTA 01a05f69, iOS 26 build
+ * 18, Clay: "What the hell happened here?" over a screenshot of a distinctly
+ * lighter rounded panel filling the whole field.
  *
- * That is DROVE-254's finding used rather than fought. It filed "this blends
- * in which is annoying" about the session capsule, and it was right, because a
- * capsule has to read as an OBJECT. The text row must not read as an object at
- * all; it is the field's own area. Blending in is the requirement.
+ * So there is no surface on the text row at rest. No material, no tint, no
+ * rim: the bubble looks exactly as it did before this ticket, which is the
+ * only acceptable resting state for the field's own area.
+ *
+ * WHAT DRAWS THE PRESS INSTEAD. The SHELL, and only while a finger is on the
+ * text row. `UIGlassEffect.isInteractive` is a property of the effect view and
+ * answers every touch delivered inside it — that is the whole reason the press
+ * had to move off the shell in the first place, because a press on the `+` or
+ * on the capsule swelled the bubble. It is also a plain boolean prop, so the
+ * question "is this press on the text row" can be asked in JS and answered
+ * before UIKit ever sees it. The text row reports its own touches, this
+ * function turns that into the shell's `isInteractive`, and a touch that
+ * starts anywhere else never reaches it.
+ *
+ * That keeps all three press cases and costs the resting state nothing, which
+ * the surface could not do at any tint: an effect view mounted at rest draws
+ * at rest.
  */
-export function resolveComposerBubbleTextRowSurface() {
-    return {
-        nativeEffect: true,
-        material: 'liquid',
-        glassEffectStyle: 'regular',
-        intensity: 92,
-        interactive: true,
-    } as const;
+export function resolveComposerShellInteractive(
+    pressedTarget: ComposerPressTarget | null,
+): boolean {
+    return pressedTarget === 'textRow';
 }
 
 /**
@@ -440,4 +456,3 @@ export const COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY = resolveComposerBubbleSes
 export const COMPOSER_BUBBLE_SESSION_SEGMENT_GEOMETRY = resolveComposerBubbleSessionSegmentGeometry();
 export const COMPOSER_BUBBLE_DISC_GEOMETRY = resolveComposerBubbleDiscGeometry();
 export const COMPOSER_BUBBLE_SURFACE = resolveComposerBubbleSurface();
-export const COMPOSER_BUBBLE_TEXT_ROW_SURFACE = resolveComposerBubbleTextRowSurface();
