@@ -55,7 +55,7 @@
  *
  *   Samantha, the compact en-US voice an iPhone speaks with by default   -16.16
  *   Daniel, compact en-GB                                                -18.80
- *   Albert, what `pickVoice` lands on here with no enhanced voice installed  -24.03
+ *   Albert, what `pickVoice` landed on with no enhanced voice, until DROVE-390  -24.03
  *   `say(1)` at its own defaults, which is what DROVE-341 measured        -18.92
  *
  * -16 SURVIVES, and knowing why is the point of redoing it. The band is real

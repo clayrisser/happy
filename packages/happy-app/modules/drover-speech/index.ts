@@ -42,6 +42,18 @@ export interface SpeechVoice {
     quality: SpeechVoiceQuality;
     /** A Personal Voice the user recorded (iOS 17+). */
     personal?: boolean;
+    /**
+     * A novelty voice (Albert, Zarvox and the rest of the MacinTalk set), as
+     * iOS 17 flags it or DroverVoicePick names it. Never read with unless
+     * the user chose it (DROVE-390). Missing from a build before 22, where
+     * JS falls back to its own list and the identifier shape.
+     */
+    novelty?: boolean;
+    /**
+     * The voice `AVSpeechSynthesisVoice(language:)` returns for this voice's
+     * language: what iOS itself reads with. Missing from a build before 22.
+     */
+    systemDefault?: boolean;
 }
 
 export interface SpeakOptions {
