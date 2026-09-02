@@ -39,6 +39,9 @@ export class Encryption {
     private sessionEncryptions = new Map<string, SessionEncryption>();
     private machineEncryptions = new Map<string, MachineEncryption>();
     private sessionBlobKeys = new Map<string, Uint8Array>();
+    // The raw per-session data key, kept so the owner can re-wrap it for a
+    // guest (DROVE-388). Null for a legacy session, which has none.
+    private sessionDataKeys = new Map<string, Uint8Array | null>();
     private cache: EncryptionCache;
 
     private constructor(anonID: string, masterSecret: Uint8Array, contentKeyPair: sodium.KeyPair, masterBlobKey: Uint8Array) {
@@ -86,6 +89,7 @@ export class Encryption {
                 this.cache
             );
             this.sessionEncryptions.set(sessionId, sessionEnc);
+            this.sessionDataKeys.set(sessionId, dataKey);
 
             // Derive blob key for this session.
             // Legacy sessions (null dataKey) use the master blob key.
@@ -112,6 +116,7 @@ export class Encryption {
     removeSessionEncryption(sessionId: string): void {
         this.sessionEncryptions.delete(sessionId);
         this.sessionBlobKeys.delete(sessionId);
+        this.sessionDataKeys.delete(sessionId);
         // Also clear any cached data for this session
         this.cache.clearSessionCache(sessionId);
     }
@@ -124,6 +129,14 @@ export class Encryption {
      */
     getSessionBlobKey(sessionId: string): Uint8Array | null {
         return this.sessionBlobKeys.get(sessionId) ?? null;
+    }
+
+    /**
+     * The session's own data key, for re-wrapping to a guest (DROVE-388).
+     * Null for a legacy session (nothing to share) or one not initialized.
+     */
+    getSessionDataKey(sessionId: string): Uint8Array | null {
+        return this.sessionDataKeys.get(sessionId) ?? null;
     }
 
     /** Return the domain-separated blob key used by project avatar blobs. */
@@ -223,7 +236,16 @@ export class Encryption {
 
     async encryptEncryptionKey(key: Uint8Array): Promise<Uint8Array> {
         // Use public key for encryption (encrypt TO ourselves)
-        const encrypted = encryptBox(key, this.contentKeyPair.publicKey);
+        return this.wrapEncryptionKeyFor(key, this.contentKeyPair.publicKey);
+    }
+
+    /**
+     * The same wrap, to someone else's content public key (DROVE-388): what
+     * a grant carries. Same layout as dataEncryptionKey, so the grantee opens
+     * it with decryptEncryptionKey unchanged.
+     */
+    wrapEncryptionKeyFor(key: Uint8Array, recipientPublicKey: Uint8Array): Uint8Array {
+        const encrypted = encryptBox(key, recipientPublicKey);
         const result = new Uint8Array(encrypted.length + 1);
         result[0] = 0; // Version byte
         result.set(encrypted, 1);

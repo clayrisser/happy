@@ -28,7 +28,14 @@ export const ProfileSchema = z.object({
     lastName: z.string().nullable(),
     avatar: ImageRefSchema.nullable(),
     github: GitHubProfileSchema.nullable(),
-    connectedServices: z.array(z.string()).default([])
+    connectedServices: z.array(z.string()).default([]),
+    // DROVE-388. `kind` is which chrome to draw: a guest sees only the
+    // sessions it was granted. `contentPublicKey` is the box key (base64)
+    // an owner wraps a session key to when it shares one with this account;
+    // the app registers its own at login. Both default for relays that
+    // predate grants.
+    kind: z.enum(['owner', 'guest']).default('owner'),
+    contentPublicKey: z.string().nullable().default(null)
 });
 
 export type GitHubProfile = z.infer<typeof GitHubProfileSchema>;
@@ -46,7 +53,9 @@ export const profileDefaults: Profile = {
     lastName: null,
     avatar: null,
     github: null,
-    connectedServices: []
+    connectedServices: [],
+    kind: 'owner',
+    contentPublicKey: null
 };
 Object.freeze(profileDefaults);
 
