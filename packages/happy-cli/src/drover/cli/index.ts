@@ -50,6 +50,16 @@ export const droverVerbs: readonly DroverVerb[] = [
         load: () => import('./ask'),
     },
     {
+        name: 'check',
+        summary: 'Refuse a tree whose header comments have become commands. The tripwire bin/drover runs before it dispatches.',
+        load: () => import('./check'),
+    },
+    {
+        name: 'daemon',
+        summary: 'The fork\'s happy-cli daemon under a supervisor: adopt the one already running, or start it.',
+        load: () => import('./daemon'),
+    },
+    {
         name: 'mcps',
         summary: 'The MCP servers and model providers each harness is configured with. Reads only.',
         load: () => import('./mcps'),
@@ -58,6 +68,16 @@ export const droverVerbs: readonly DroverVerb[] = [
         name: 'questions',
         summary: 'Every prompt still waiting for an answer, anywhere, including the ones no session owns.',
         load: () => import('./questions'),
+    },
+    {
+        name: 'needs',
+        summary: 'Ask the human to DO something, and keep it on a list until it is.',
+        load: () => import('./needs'),
+    },
+    {
+        name: 'read',
+        summary: 'Steer what the PHONE reads aloud. The Mac never speaks.',
+        load: () => import('./read'),
     },
     {
         name: 'reclaim-sessions',
@@ -103,6 +123,16 @@ export const droverVerbs: readonly DroverVerb[] = [
         name: 'account-of',
         summary: 'Which account THIS process is running on, from the config dir rather than a stale stamp.',
         load: () => import('./account-of'),
+    },
+    {
+        name: 'sessions',
+        summary: 'What is running, where, and on which account. One session is one row, sized to the terminal.',
+        load: () => import('./sessions'),
+    },
+    {
+        name: 'pick-session',
+        summary: 'Pick a conversation in this directory to resume, so the id is known before claude starts.',
+        load: () => import('./pick-session'),
     },
     {
         name: 'stale-sessions',
@@ -181,6 +211,11 @@ export const droverVerbs: readonly DroverVerb[] = [
         name: 'pick-pi-session',
         summary: 'Pick a pi session to resume, for this project.',
         load: () => import('./pick-pi-session'),
+    },
+    {
+        name: 'status',
+        summary: 'Bus health, pending prompts, push delivery, gates, services. Reads only.',
+        load: () => import('./status'),
     },
 ];
 
