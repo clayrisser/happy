@@ -1,0 +1,6 @@
+If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&client_id=stub&state=12345
+Paste code here if prompted > wrong-one
+Invalid code. Please make sure the full code was copied.
+Paste code here if prompted > wrong-two
+Invalid code. Please make sure the full code was copied.
+Paste code here if prompted >

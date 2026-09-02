@@ -40,6 +40,16 @@ export interface DroverVerb {
 
 export const droverVerbs: readonly DroverVerb[] = [
     {
+        name: 'approval-parse',
+        summary: "Read Claude Code's own approval dialog off a tmux pane capture. Pure: stdin to stdout.",
+        load: () => import('./approval-parse'),
+    },
+    {
+        name: 'ask',
+        summary: 'Put a question on the phone, the watch and tmux, and block until a human answers it.',
+        load: () => import('./ask'),
+    },
+    {
         name: 'mcps',
         summary: 'The MCP servers and model providers each harness is configured with. Reads only.',
         load: () => import('./mcps'),
