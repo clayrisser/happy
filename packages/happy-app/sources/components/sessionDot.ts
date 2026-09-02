@@ -23,7 +23,7 @@
 import * as React from 'react';
 import { resolveSessionState } from '@/sync/sessionState';
 import type { Session } from '@/sync/storageTypes';
-import { isLiveStatusFresh, liveStatusMain } from '@/utils/liveStatus';
+import { isLiveStatusFresh, liveStatusMain, liveStatusWorkerCount } from '@/utils/liveStatus';
 import { contextReading } from './contextCompaction';
 import {
     statusDotBlinks,
@@ -70,6 +70,15 @@ export interface SessionDotFacts {
     compacting: boolean;
     /** Blocked on Clay: a permission prompt, or a question. */
     waiting: boolean;
+    /**
+     * A subagent of this session is out working (DROVE-361).
+     *
+     * Its own fact, not part of `mainWorking` — see `StatusDotInput`. A
+     * background agent outlives the turn that launched it, so this is true on
+     * plenty of sessions whose main thread is idle at the prompt, and that is
+     * the case it exists for.
+     */
+    agentsWorking: boolean;
 }
 
 /** A session with no facts to offer yet: connected and idle, which draws green. */
@@ -81,6 +90,7 @@ export const idleSessionDotFacts: SessionDotFacts = {
     atCompaction: false,
     compacting: false,
     waiting: false,
+    agentsWorking: false,
 };
 
 /**
@@ -143,6 +153,12 @@ export function sessionDotFacts(session: Session, now: number): SessionDotFacts 
         atCompaction: context?.atCompaction ?? false,
         compacting,
         waiting: state === 'permission_required' || state === 'input_required',
+        // The workers this session sent out (DROVE-361), off the SAME array
+        // the footer counts and the sheet lists, so a row that pulses is a row
+        // whose sheet has something in it. Gated on the same freshness check
+        // as `main`: a snapshot too old to draw a clock from is too old to
+        // claim an agent is still running.
+        agentsWorking: fresh && liveStatusWorkerCount(live) > 0,
     };
 }
 

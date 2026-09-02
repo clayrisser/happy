@@ -581,6 +581,10 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
         compacting: !!summary?.compacting,
         waiting: p.connectionStatus?.state === 'permission_required'
             || p.connectionStatus?.state === 'input_required',
+        // The workers already counted beside this dot (DROVE-361). `sideCount`
+        // is what the people glyph two inches to the right prints, so the strip
+        // cannot draw a green dot next to its own "3".
+        agentsWorking: sideCount > 0,
         now,
     });
     // A dot is drawn whenever there is a connection to speak for. The COLOUR

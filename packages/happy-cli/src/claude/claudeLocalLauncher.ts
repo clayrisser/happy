@@ -293,6 +293,10 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                 mainWorking,
                 toolRunning: !!liveStatus?.main && !!liveStatus.tool,
                 compacting: !!liveStatus?.compacting,
+                // DROVE-361: the workers this session has out. Same array the
+                // phone counts, so the tmux dot and the session row agree on a
+                // session whose main thread is idle at the prompt.
+                agentsWorking: (liveStatus?.agents?.length ?? 0) > 0,
             })
             // DROVE-340: the same boolean is the only turn boundary local mode
             // has. Its working-to-idle edge is a turn ending, which is when

@@ -164,6 +164,26 @@ export interface StatusDotInput {
     compacting?: boolean;
     /** Connected and blocked on Clay: a permission prompt, or a question. */
     waiting: boolean;
+    /**
+     * A subagent of this session is out working (DROVE-361).
+     *
+     * `summarizeLiveStatus(...).sideCount > 0` — the same array the footer
+     * counts and the agents sheet lists. Kept SEPARATE from `mainWorking`
+     * rather than folded into it, because DROVE-155 decided what that field
+     * means and was right: six background agents are not the main thread
+     * working, `main` is what the elapsed clock and the turn tokens hang off,
+     * and widening it would make the strip claim a turn that is not running.
+     *
+     * Clay, with both halves photographed: "how am I running a subagent that
+     * you're not detecting?" His terminal listed `general-purpose  Running
+     * plugins.bats after … 1h 39m 8s`; his phone drew flat green. The main
+     * thread genuinely WAS idle at the prompt — a background agent outlives
+     * the turn that launched it — so every honest term above reads false and
+     * the session still had an hour and a half of work out. What the dot means
+     * to the person holding the phone is "is this session doing anything", and
+     * that has to include the workers it sent out.
+     */
+    agentsWorking?: boolean;
     now: number;
 }
 
@@ -189,6 +209,12 @@ export function statusDotState(input: StatusDotInput): StatusDotState {
     if (input.mainWorking && !input.toolRunning && input.atCompaction) return 'compacting';
     if (input.mainWorking) return 'working';
     if (input.waiting) return 'waiting';
+    // A subagent out on its own, and BELOW waiting on purpose (DROVE-361).
+    // Amber is the one hue that asks Clay for something; a background agent
+    // never is, and a permission prompt masked by a fan-out is a prompt that
+    // sits unanswered. Above `connected`, because an hour of work in flight is
+    // not idle whichever thread is doing it.
+    if (input.agentsWorking) return 'working';
     return 'connected';
 }
 

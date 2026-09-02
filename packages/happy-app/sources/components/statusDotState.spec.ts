@@ -176,3 +176,40 @@ describe('the word is gone, so the label carries it', () => {
         expect(statusDotColors.recentlyDisconnected).not.toBe(statusDotColors.waiting);
     });
 });
+
+/**
+ * A SUBAGENT OUT ON ITS OWN (DROVE-361).
+ *
+ * Clay's photograph: the terminal listing `general-purpose  Running
+ * plugins.bats after … 1h 39m 8s`, the phone drawing flat green beside it. The
+ * main thread really was idle — a background agent outlives the turn that
+ * launched it — so no term above it can cover this and it needs its own.
+ */
+describe('a running subagent', () => {
+    it('pulses working while the main thread sits idle at the prompt', () => {
+        expect(statusDotState({ ...base, mainWorking: false, agentsWorking: true }))
+            .toBe('working');
+    });
+
+    it('does not mask an amber that is asking Clay for something', () => {
+        expect(statusDotState({ ...base, agentsWorking: true, waiting: true }))
+            .toBe('waiting');
+    });
+
+    it('still loses to disconnected, like every other kind of working', () => {
+        expect(statusDotState({
+            ...base,
+            agentsWorking: true,
+            online: false,
+            lastSeenAt: null,
+        })).toBe('disconnected');
+    });
+
+    it('leaves an idle session with no agents green', () => {
+        expect(statusDotState({ ...base, agentsWorking: false })).toBe('connected');
+    });
+
+    it('is absent on a caller that does not pass it, and reads as none', () => {
+        expect(statusDotState(base)).toBe('connected');
+    });
+});

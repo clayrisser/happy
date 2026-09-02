@@ -1098,6 +1098,179 @@ describe('createLiveStatusReader', () => {
     })
 })
 
+/**
+ * A SUBAGENT INSIDE ONE LONG TOOL CALL (DROVE-361).
+ *
+ * Clay: "how am I running a subagent that you're not detecting?" His terminal
+ * listed `general-purpose  Running plugins.bats after … 1h 39m 8s`; his phone
+ * drew flat green with nothing in the sheet. `plugins.bats` is ONE Bash call,
+ * so the agent's transcript had not been written to in over an hour, and the
+ * ninety-second mtime gate — a cost control, never a liveness signal — deleted
+ * a running agent.
+ *
+ * The fixture is his case to the second: an agent launched, its transcript
+ * silent far past the gate, and no completion notification anywhere.
+ */
+describe('an agent that has gone quiet inside a long tool call (DROVE-361)', () => {
+    let root: string
+    let projectDir: string
+    let subagents: string
+    let transcript: string
+    const sessionId = 'sess-quiet'
+
+    beforeEach(() => {
+        root = mkdtempSync(join(tmpdir(), 'drove361-'))
+        projectDir = join(root, 'projects', '-x')
+        subagents = join(projectDir, sessionId, 'subagents')
+        mkdirSync(subagents, { recursive: true })
+        transcript = join(projectDir, `${sessionId}.jsonl`)
+    })
+
+    afterEach(() => {
+        rmSync(root, { recursive: true, force: true })
+    })
+
+    const touch = (path: string, at: number) => {
+        const seconds = at / 1000
+        utimesSync(path, seconds, seconds)
+    }
+
+    /**
+     * The Agent tool_result, field for field off Clay's transcript: a USER
+     * record carrying the structured `toolUseResult` and the banner beside it.
+     */
+    const launchRecord = (at: number, agentId: string, toolUseId: string) => JSON.stringify({
+        type: 'user',
+        isSidechain: false,
+        timestamp: iso(at),
+        uuid: `l-${at}-${agentId}`,
+        message: {
+            role: 'user',
+            content: [{
+                type: 'tool_result',
+                tool_use_id: toolUseId,
+                content: [{ type: 'text', text: `Async agent launched successfully.\nagentId: ${agentId} (internal ID)` }],
+            }],
+        },
+        toolUseResult: {
+            isAsync: true,
+            status: 'async_launched',
+            agentId,
+            description: 'Running plugins.bats after cleanup',
+        },
+    })
+
+    /** The completion, on the `queue-operation` record Claude Code writes. */
+    const notificationRecord = (at: number, agentId: string, status = 'completed') => JSON.stringify({
+        type: 'queue-operation',
+        operation: 'enqueue',
+        timestamp: iso(at),
+        sessionId,
+        content: `<task-notification>\n<task-id>${agentId}</task-id>\n<status>${status}</status>\n</task-notification>`,
+    })
+
+    /** One agent, launched, then silent for `silentFor` ms. */
+    const writeQuietAgent = (now: number, opts: { silentFor: number; launched: boolean; finished?: boolean }) => {
+        const startedAt = now - opts.silentFor
+        const lines = [promptRecord(now - opts.silentFor - 10_000, 'run the suite')]
+        if (opts.launched) lines.push(launchRecord(now - opts.silentFor - 1_000, 'a1', 'toolu_agent_a'))
+        if (opts.finished) lines.push(notificationRecord(now - 1_000, 'a1'))
+        lines.push('')
+        writeFileSync(transcript, lines.join('\n'))
+
+        writeFileSync(join(subagents, 'agent-a1.meta.json'), JSON.stringify({
+            agentType: 'general-purpose',
+            description: 'Running plugins.bats after cleanup',
+            toolUseId: 'toolu_agent_a',
+        }))
+        writeFileSync(join(subagents, 'agent-a1.jsonl'), [agentRecord(startedAt), ''].join('\n'))
+        touch(join(subagents, 'agent-a1.jsonl'), startedAt)
+        return startedAt
+    }
+
+    it('is dropped at ninety seconds when the launch was never seen — the old bargain, kept', () => {
+        const now = Date.now()
+        writeQuietAgent(now, { silentFor: 5_940_000, launched: false })
+        expect(createLiveStatusReader({ projectDir, sessionId }).read(now)).toBeNull()
+    })
+
+    it('is still out after 1h 39m of silence when we watched it launch', () => {
+        const now = Date.now()
+        const startedAt = writeQuietAgent(now, { silentFor: 5_948_000, launched: true })
+        const status = createLiveStatusReader({ projectDir, sessionId }).read(now)
+        expect(status).not.toBeNull()
+        expect(status!.agents).toHaveLength(1)
+        // The name the terminal draws, and the clock it counts up from.
+        expect(status!.agents![0].label).toBe('Running plugins.bats after cleanup')
+        expect(status!.agents![0].startedAt).toBe(startedAt)
+    })
+
+    it('leaves on its completion notification, not on a timeout', () => {
+        const now = Date.now()
+        // Its transcript is FRESH — the gate would have kept it either way, so
+        // what retires it here can only be the notification.
+        writeFileSync(transcript, [
+            promptRecord(now - 300_000, 'run the suite'),
+            launchRecord(now - 290_000, 'a1', 'toolu_agent_a'),
+            notificationRecord(now - 1_000, 'a1'),
+            '',
+        ].join('\n'))
+        writeFileSync(join(subagents, 'agent-a1.meta.json'), JSON.stringify({
+            agentType: 'general-purpose',
+            description: 'Running plugins.bats after cleanup',
+            toolUseId: 'toolu_agent_a',
+        }))
+        writeFileSync(join(subagents, 'agent-a1.jsonl'), [agentRecord(now - 290_000), ''].join('\n'))
+        touch(join(subagents, 'agent-a1.jsonl'), now - 290_000)
+
+        const status = createLiveStatusReader({ projectDir, sessionId }).read(now)
+        expect(status?.agents ?? []).toHaveLength(0)
+    })
+
+    it('is not retired by a progress note that is not terminal', () => {
+        const now = Date.now()
+        writeFileSync(transcript, [
+            promptRecord(now - 300_000, 'run the suite'),
+            launchRecord(now - 290_000, 'a1', 'toolu_agent_a'),
+            notificationRecord(now - 1_000, 'a1', 'running'),
+            '',
+        ].join('\n'))
+        writeFileSync(join(subagents, 'agent-a1.meta.json'), JSON.stringify({
+            agentType: 'general-purpose',
+            description: 'Running plugins.bats after cleanup',
+            toolUseId: 'toolu_agent_a',
+        }))
+        writeFileSync(join(subagents, 'agent-a1.jsonl'), [agentRecord(now - 290_000), ''].join('\n'))
+        touch(join(subagents, 'agent-a1.jsonl'), now - 6_000_000)
+
+        const status = createLiveStatusReader({ projectDir, sessionId }).read(now)
+        expect(status!.agents).toHaveLength(1)
+    })
+
+    it('holds a NESTED agent too, whose launch is itself a sidechain record', () => {
+        const now = Date.now()
+        const nested = JSON.parse(launchRecord(now - 290_000, 'a2', 'toolu_agent_b'))
+        nested.isSidechain = true
+        writeFileSync(transcript, [
+            promptRecord(now - 300_000, 'run the suite'),
+            JSON.stringify(nested),
+            '',
+        ].join('\n'))
+        writeFileSync(join(subagents, 'agent-a2.meta.json'), JSON.stringify({
+            agentType: 'Explore',
+            description: 'Map the agent UI',
+            toolUseId: 'toolu_agent_b',
+            parentAgentId: 'a1',
+        }))
+        writeFileSync(join(subagents, 'agent-a2.jsonl'), [agentRecord(now - 290_000), ''].join('\n'))
+        touch(join(subagents, 'agent-a2.jsonl'), now - 6_000_000)
+
+        const status = createLiveStatusReader({ projectDir, sessionId }).read(now)
+        expect(status!.agents).toHaveLength(1)
+        expect(status!.agents![0].parentId).toBe('a1')
+    })
+})
+
 describe('LiveStatusPublisher', () => {
     const status = (at: number, toolStartedAt: number): LiveStatus => ({
         at,
