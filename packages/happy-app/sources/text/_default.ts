@@ -267,6 +267,10 @@ export const en = {
             : `${count} images could not be uploaded and were not sent.`,
         notSupportedTitle: 'Images Not Supported',
         notSupportedMessage: 'This agent does not support image attachments. Images were not sent.',
+        // What the plus says on a session whose harness cannot take an image
+        // (DROVE-378). One fragment, no title and no body: it is the whole
+        // answer, and DROVE-346 keeps these to the handcrafted app's density.
+        notSupportedFragment: 'this agent can\'t take images',
         // The Add context sheet the plus opens (DROVE-128).
         addContextTitle: 'Add context',
         sourceCamera: 'Camera',

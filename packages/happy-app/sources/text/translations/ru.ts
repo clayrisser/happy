@@ -1316,6 +1316,7 @@ export const ru: TranslationStructure = {
             : `${count} изображений не удалось загрузить — они не были отправлены.`,
         notSupportedTitle: 'Изображения не поддерживаются',
         notSupportedMessage: 'Этот агент не поддерживает вложения изображений. Изображения не были отправлены.',
+        notSupportedFragment: 'этот агент не принимает изображения',
         // The Add context sheet the plus opens (DROVE-128).
         addContextTitle: 'Добавить контекст',
         sourceCamera: 'Камера',

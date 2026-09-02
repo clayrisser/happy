@@ -1308,6 +1308,9 @@ export function SessionViewLoaded({
                 onPickFiles={canUseAttachments ? pickFiles : undefined}
                 onRemoveImage={canUseAttachments ? removeImage : undefined}
                 onAddImages={canUseAttachments ? addImages : undefined}
+                // The plus stays on a session that cannot take an image and
+                // says so on tap, rather than not being drawn (DROVE-378).
+                attachmentsUnsupportedNote={canUseAttachments ? undefined : t('imageUpload.notSupportedFragment')}
                 autocompletePrefixes={AGENT_INPUT_AUTOCOMPLETE_PREFIXES}
                 autocompleteSuggestions={handleAutocompleteSuggestions}
                 usageData={usageData}

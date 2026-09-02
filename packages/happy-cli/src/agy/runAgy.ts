@@ -33,6 +33,8 @@ import type { AgentMessage } from '@/agent/core';
 import { normalizeRemotePermissionMode } from '@/claude/utils/permissionMode';
 import { AgyBackend } from './AgyBackend';
 import { DEFAULT_AGY_MODEL } from './constants';
+import { subscribeHarnessAttachments, textWithHarnessAttachments } from '@/utils/harnessAttachments';
+import { createSerialAsyncHandler } from '@/codex/utils/serialAsyncHandler';
 
 export interface RunAgyOptions {
   credentials: Credentials;
@@ -175,8 +177,11 @@ export async function runAgy(opts: RunAgyOptions): Promise<void> {
     process.stdin.setEncoding('utf8');
   }
 
-  session.onUserMessage((message) => {
-    if (!message.content.text) return;
+  subscribeHarnessAttachments(session, 'agy');
+  session.onUserMessage(createSerialAsyncHandler(async (message) => {
+    const attachments = await session.drainAttachmentsForUserMessage();
+    // An image with no words is a real message (DROVE-378).
+    if (!message.content.text && attachments.length === 0) return;
 
     if (message.meta?.permissionMode) {
       const mode = normalizeRemotePermissionMode(message.meta.permissionMode);
@@ -192,9 +197,13 @@ export async function runAgy(opts: RunAgyOptions): Promise<void> {
       }
     }
 
-    messageBuffer.addMessage(message.content.text, 'user');
-    messageQueue.push(message.content.text, {});
-  });
+    messageBuffer.addMessage(message.content.text ?? '', 'user');
+    messageQueue.push(message.content.text ?? '', {}, attachments.length > 0 ? attachments : undefined);
+  }, (error) => {
+    logger.warn('[agy] Failed to handle user message', {
+      errorName: error instanceof Error ? error.name : typeof error,
+    });
+  }));
   session.keepAlive(thinking, 'remote');
 
   const keepAliveInterval = setInterval(() => {
@@ -237,7 +246,12 @@ export async function runAgy(opts: RunAgyOptions): Promise<void> {
       log(`Incoming prompt: ${batch.message.slice(0, 200)}`);
       sendEnvelopes(sessionManager.startTurn());
       try {
-        await backend.sendPrompt(process.cwd(), batch.message);
+        await backend.sendPrompt(process.cwd(), textWithHarnessAttachments({
+          text: batch.message,
+          attachments: batch.attachments,
+          sessionId: session.sessionId,
+          harness: 'agy',
+        }));
         sendEnvelopes(sessionManager.endTurn('completed'));
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
