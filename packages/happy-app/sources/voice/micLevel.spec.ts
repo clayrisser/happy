@@ -7,6 +7,7 @@ import {
     pushLevel,
     rmsToLevel,
     SILENCE_DB,
+    TALKING_DISTANCE_DB,
     WAVEFORM_BARS,
 } from './micLevel';
 
@@ -25,6 +26,12 @@ describe('rmsToLevel', () => {
     it('fills the bar at full scale and clamps above it', () => {
         expect(rmsToLevel(1)).toBe(1);
         expect(rmsToLevel(4)).toBe(1);
+        // Full scale is -10 dBFS, not 0: the top of the meter is where a loud
+        // voice gets, not where the converter clips (DROVE-383, second pass).
+        expect(FULL_SCALE_DB).toBe(-10);
+        expect(rmsToLevel(atDb(FULL_SCALE_DB))).toBe(1);
+        expect(rmsToLevel(atDb(-5))).toBe(1);
+        expect(rmsToLevel(atDb(FULL_SCALE_DB - 1))).toBeLessThan(1);
     });
 
     it('puts ordinary speech in the visible middle, not a sliver', () => {
@@ -89,11 +96,33 @@ describe('the level to height mapping (DROVE-383)', () => {
         expect(levelToHeight(4, strip)).toBe(strip);
     });
 
-    it('lands -20 dB about half way up, and full scale at the top', () => {
-        const half = levelToHeight(rmsToLevel(atDb(-20)), strip);
-        expect(half).toBeGreaterThan(strip * 0.45);
-        expect(half).toBeLessThan(strip * 0.65);
+    /**
+     * The second pass (IMG_0647 on DROVE-383). Full scale used to be 0 dBFS
+     * and -20 landed about half way; a phone at talking distance peaks near
+     * -20 and never gets within 10 dB of 0, so the top third of the strip was
+     * reserved for a level that never came. Now the loud edge of talking
+     * distance is three quarters of the way up (a voice a couple of dB under
+     * it, 70%) and -10 dBFS is the top.
+     */
+    it('lands the loud edge of talking distance three quarters up, and -10 dBFS at the top', () => {
+        const loud = levelToHeight(rmsToLevel(atDb(TALKING_DISTANCE_DB.loud)), strip);
+        expect(loud).toBeGreaterThanOrEqual(strip * 0.7);
+        expect(loud).toBeLessThanOrEqual(strip * 0.8);
+        // Two dB under the loud edge is an ordinary voice, and it is 70% up.
+        expect(levelToHeight(rmsToLevel(atDb(-22)), strip)).toBeCloseTo(strip * 0.7, 10);
+        expect(FULL_SCALE_DB).toBe(-10);
         expect(levelToHeight(rmsToLevel(atDb(FULL_SCALE_DB)), strip)).toBe(strip);
+        expect(levelToHeight(rmsToLevel(atDb(-5)), strip)).toBe(strip);
+        expect(levelToHeight(rmsToLevel(atDb(0)), strip)).toBe(strip);
+    });
+
+    it('spends the strip on talking distance: the band starts half way up and is a fifth of the strip wide', () => {
+        const quiet = levelToHeight(rmsToLevel(atDb(TALKING_DISTANCE_DB.quiet)), strip);
+        const loud = levelToHeight(rmsToLevel(atDb(TALKING_DISTANCE_DB.loud)), strip);
+        expect(TALKING_DISTANCE_DB.quiet).toBeLessThan(TALKING_DISTANCE_DB.loud);
+        expect(quiet).toBeGreaterThanOrEqual(strip * 0.5);
+        expect(loud - quiet).toBeGreaterThan(strip * 0.2);
+        expect(loud).toBeLessThan(strip);
     });
 
     it('gives the quietest audible sample its own height, above the baseline', () => {

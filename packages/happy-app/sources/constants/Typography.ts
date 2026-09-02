@@ -77,6 +77,11 @@ export const FontWeights = {
   bold: '700',
 } as const;
 
+// Vertical metrics of the faces above (cap height, line height), for layout
+// that lines up with the ink of the type. Kept in their own react-native-free
+// module so pure layout code can read them; see FontMetrics.ts.
+export { FontMetrics } from './FontMetrics';
+
 // Style utilities for easy inline usage
 export const Typography = {
   // Default font styles (IBM Plex Sans)
