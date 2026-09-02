@@ -629,6 +629,39 @@ describe('useStartSessionFromDraft', () => {
         expect(mocks.navigateToSession).toHaveBeenCalledWith('session-1');
     });
 
+    /**
+     * AND THE PROMPT IN THE SHEET IS WHAT THE SESSION GETS (DROVE-375).
+     *
+     * Home's composer sends through this same hook — `MainView` writes the
+     * typed prompt into the draft and calls `startSession` — so a send from the
+     * new-session sheet is exactly this call. Clay's "nothing happens" turned
+     * out to be geometry rather than a refusal here, and this is the half of
+     * that claim the hook owns: with Cursor and no model catalog, a send starts
+     * the session AND the draft's own text is the first message, trimmed, on
+     * the session that came back.
+     */
+    it('sends the draft’s prompt as the first message when Cursor has no catalog', async () => {
+        mocks.machines = [{
+            id: 'machine-1',
+            online: true,
+            metadata: {
+                homeDir: '/Users/dev',
+                cliAvailability: { claude: true, codex: true, cursor: true, detectedAt: 1 },
+            },
+        }];
+        mocks.draft = createDraft({ agentType: 'cursor', input: '  wire the retry path  ' });
+
+        const { startSession } = useStartSessionFromDraft();
+
+        await expect(startSession()).resolves.toBe(true);
+        expect(mocks.alert).not.toHaveBeenCalled();
+        expect(mocks.sendMessage).toHaveBeenCalledWith(
+            'session-1',
+            'wire the retry path',
+            expect.objectContaining({ source: 'new_session' }),
+        );
+    });
+
     it('starts OpenCode, which publishes neither modes nor models', async () => {
         mocks.draft = createDraft({ agentType: 'opencode' });
 

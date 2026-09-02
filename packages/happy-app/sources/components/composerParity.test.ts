@@ -24,6 +24,11 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import {
+    COMPOSER_BUBBLE_CONTROLS_SLOT_GEOMETRY,
+    COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY,
+} from './composerBubbleLayout';
+
 const sources = join(__dirname, '..');
 const read = (relative: string) => readFileSync(join(sources, relative), 'utf8');
 
@@ -64,6 +69,37 @@ const sharedOnly = [
     'COMPOSER_BUBBLE_GEOMETRY',
     'resolveComposerBubbleSurfaceStyle',
 ];
+
+/** The text between a `{` at `open` and the `}` that closes it. */
+function braced(source: string, open: number): string {
+    let depth = 0;
+    for (let index = open; index < source.length; index += 1) {
+        if (source[index] === '{') depth += 1;
+        if (source[index] === '}') {
+            depth -= 1;
+            if (depth === 0) return source.slice(open + 1, index).trim();
+        }
+    }
+    return source.slice(open + 1).trim();
+}
+
+/**
+ * What a screen actually mounts in `ComposerBubble`'s `controls` slot.
+ *
+ * A screen may put the element there inline or hand over a binding it built
+ * further up the render — both are the same claim about the row, so a bare
+ * identifier is followed to its `const` and the definition is what comes back.
+ */
+function composerControlsSlot(source: string): string | null {
+    const prop = source.indexOf('controls={');
+    if (prop < 0) return null;
+    const expression = braced(source, prop + 'controls='.length);
+    const binding = expression.match(/^[A-Za-z_$][\w$]*$/);
+    if (!binding) return expression;
+    const declaration = source.indexOf(`const ${binding[0]} = `);
+    if (declaration < 0) return expression;
+    return source.slice(declaration + `const ${binding[0]} = `.length, declaration + 600).trim();
+}
 
 describe('both screens render the one composer (DROVE-345)', () => {
     it('mounts `ComposerBubble` on each', () => {
@@ -140,6 +176,48 @@ describe('both screens render the one composer (DROVE-345)', () => {
         const controls = read('components/ComposerSessionControls.tsx');
         expect(controls).toContain('COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY');
         expect(controls).toContain('COMPOSER_BUBBLE_SESSION_MODEL_SEGMENT_GEOMETRY');
+    });
+
+    /**
+     * AND A WRAPPER IN THE SLOT MUST PASS THE SLACK THROUGH (DROVE-375).
+     *
+     * `flex: 1` on the capsule is a property of its relationship to the ROW, so
+     * it only means anything while the capsule is the row's direct child. Home
+     * puts a `RefusableControl` in between — a bare view carrying a shake
+     * transform, so a tap can be refused while a session is being created — and
+     * a bare view sizes to its content. The capsule had nothing to flex
+     * against: it shrank to its glyphs, the model segment (`flex: 1`,
+     * `minWidth: 0`) collapsed to nothing so the harness name vanished, and
+     * send was dragged off the trailing edge into the middle of the row.
+     *
+     * That is the band DROVE-353 removed, reappearing one wrapper along, and it
+     * is why the rule cannot be "pass the capsule bare": a screen is allowed to
+     * wrap it, and what it owes when it does is the slot's flex. So the slot's
+     * geometry is the shared component's like every other piece of the shape,
+     * and a screen that wraps has to spread it.
+     */
+    it('lets a wrapper stand in the controls slot only if it carries the slot’s flex', () => {
+        for (const [screen, file] of Object.entries(screens)) {
+            const source = read(file);
+            const slot = composerControlsSlot(source);
+            expect(slot, `${screen} fills the controls slot`).not.toBe(null);
+            // A slot that IS the capsule needs nothing: it is the row's direct
+            // child and `flex: 1` reaches the row. Anything else standing there
+            // has to carry the slack across.
+            const opens = slot!.slice(slot!.indexOf('<'));
+            if (opens.startsWith('<ComposerSessionControls')) continue;
+            // On the WRAPPER, not merely somewhere in the file: an import
+            // left behind by a revert must not read as the rule being kept.
+            expect(slot!, `${screen} wraps the capsule`)
+                .toContain('COMPOSER_BUBBLE_CONTROLS_SLOT_GEOMETRY');
+        }
+        // And the slot passes the capsule's own flex through rather than
+        // restating a `1` that could drift away from it.
+        expect(COMPOSER_BUBBLE_CONTROLS_SLOT_GEOMETRY.flex)
+            .toBe(COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY.flex);
+        // The slot is the wrapper's whole contribution: it must not bring a
+        // size of its own, or it stops being transparent to the row.
+        expect(Object.keys(COMPOSER_BUBBLE_CONTROLS_SLOT_GEOMETRY)).toEqual(['flex']);
     });
 
     /**
