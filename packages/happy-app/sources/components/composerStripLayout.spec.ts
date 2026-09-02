@@ -17,6 +17,8 @@ import {
     RECORDING_BANNER_INSET_TOP,
     resolveComposerStripHeight,
     resolveComposerStripOccupant,
+    RECORDING_WAVE_HEIGHT,
+    RECORDING_WAVE_INSET,
 } from './composerStripLayout';
 import {
     COMPOSER_CONTROLS_BOTTOM_GAP,
@@ -137,6 +139,20 @@ describe('where the recording banner lives', () => {
     it('leaves the bar tall enough to hold the dot, clock, level and glyph', () => {
         expect(RECORDING_BANNER_HEIGHT).toBe(COMPOSER_STRIP_HEIGHT - RECORDING_BANNER_INSET_TOP);
         expect(RECORDING_BANNER_HEIGHT).toBeGreaterThanOrEqual(18);
+    });
+
+    /**
+     * DROVE-383 made the level strip read as a waveform instead of a row of
+     * dots, and the one thing Clay ruled out was doing it by growing the bar:
+     * "don't change the height of the red bar". So the pill is pinned to the
+     * literal 20 here, and the strip is what fits INSIDE it.
+     */
+    it('grows the level strip inside the pill without moving the pill', () => {
+        expect(RECORDING_BANNER_HEIGHT).toBe(20);
+        expect(RECORDING_WAVE_HEIGHT).toBe(RECORDING_BANNER_HEIGHT - RECORDING_WAVE_INSET * 2);
+        expect(RECORDING_WAVE_HEIGHT).toBeLessThan(RECORDING_BANNER_HEIGHT);
+        // It is worth having at all: the 12pt it used to be was the defect.
+        expect(RECORDING_WAVE_HEIGHT).toBeGreaterThan(12);
     });
 
     it('keeps the strip the 20pt the dock arithmetic was measured against', () => {

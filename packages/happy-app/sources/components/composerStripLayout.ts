@@ -133,6 +133,26 @@ export const RECORDING_BANNER_INSET_TOP = 0;
 /** 20pt of red. Enough for a dot, a clock, a level strip and a glyph. */
 export const RECORDING_BANNER_HEIGHT = COMPOSER_STRIP_HEIGHT - RECORDING_BANNER_INSET_TOP;
 
+/**
+ * The air the level strip leaves above and below itself inside the pill.
+ *
+ * Small on purpose. The strip is the only thing in the row that wants height,
+ * and DROVE-383 is about it having had far too little: it was handed 12 of the
+ * pill's 20 points and drew a row of dots. Two points of clearance is enough
+ * to keep a full-scale bar off the capsule's curve.
+ */
+export const RECORDING_WAVE_INSET = 2;
+
+/**
+ * How tall the level strip is: the pill's inner height.
+ *
+ * DERIVED, not chosen. The pill's own height does not move for this — that is
+ * `RECORDING_BANNER_HEIGHT` and DROVE-157 / DROVE-221 are both about what
+ * happens when it drifts — so the strip is what the pill already has, minus
+ * its clearance, and it changes only if the pill does.
+ */
+export const RECORDING_WAVE_HEIGHT = RECORDING_BANNER_HEIGHT - RECORDING_WAVE_INSET * 2;
+
 export interface RecordingBannerFrame {
     position: 'absolute';
     left: number;
