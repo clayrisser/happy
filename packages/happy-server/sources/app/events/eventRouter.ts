@@ -75,6 +75,7 @@ export type ClientConnection = SessionScopedConnection | UserScopedConnection | 
 export type RecipientFilter =
     | { type: 'all-interested-in-session'; sessionId: string }
     | { type: 'user-scoped-only' }
+    | { type: 'user-scoped-and-grantees'; sessionId: string }  // Session-specific things the phone gets: the owner's phone plus every grantee's (DROVE-388)
     | { type: 'machine-scoped-only'; machineId: string }  // For update-machine: sends to user-scoped + only the specific machine
     | { type: 'all-user-authenticated-connections' };
 
@@ -260,6 +261,20 @@ export interface EphemeralPayload {
     [key: string]: any;
 }
 
+// === GRANT ROOMS ===
+
+/**
+ * Every room above is keyed by the EMITTING account, and everything about a
+ * session is emitted under its owner's id, so a grantee's socket in its own
+ * `user:<grantee>:...` rooms would hear nothing. A grant adds one room per
+ * session that a grantee's user-scoped sockets join (DROVE-388): at connect
+ * for every grant it holds, live when a grant is made, and they leave it
+ * when the grant is revoked.
+ */
+export function sessionGrantRoom(sessionId: string): string {
+    return `grant:session:${sessionId}`;
+}
+
 // === EVENT ROUTER CLASS ===
 
 class EventRouter {
@@ -292,6 +307,15 @@ class EventRouter {
 
     removeConnection(userId: string, connection: ClientConnection): void {
         // Socket.IO automatically removes sockets from all rooms on disconnect
+    }
+
+    /** Put every live user-scoped socket of an account into a room (cross-replica via the adapter). */
+    joinUserScoped(userId: string, room: string): void {
+        this.io.in(`user:${userId}:user-scoped`).socketsJoin(room);
+    }
+
+    leaveUserScoped(userId: string, room: string): void {
+        this.io.in(`user:${userId}:user-scoped`).socketsLeave(room);
     }
 
     // === EVENT EMISSION METHODS ===
@@ -375,8 +399,10 @@ class EventRouter {
             case 'user-scoped-only':
                 return [`user:${userId}:user-scoped`];
             case 'all-interested-in-session':
-                // Union: session watchers + user-scoped (Socket.IO deduplicates)
-                return [`user:${userId}:session:${filter.sessionId}`, `user:${userId}:user-scoped`];
+                // Union: session watchers + user-scoped + grantees (Socket.IO deduplicates)
+                return [`user:${userId}:session:${filter.sessionId}`, `user:${userId}:user-scoped`, sessionGrantRoom(filter.sessionId)];
+            case 'user-scoped-and-grantees':
+                return [`user:${userId}:user-scoped`, sessionGrantRoom(filter.sessionId)];
             case 'machine-scoped-only':
                 // Union: specific machine + user-scoped
                 return [`user:${userId}:machine:${filter.machineId}`, `user:${userId}:user-scoped`];

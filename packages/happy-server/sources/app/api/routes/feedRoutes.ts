@@ -7,7 +7,7 @@ import { db } from "@/storage/db";
 
 export function feedRoutes(app: Fastify) {
     app.get('/v1/feed', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: {
             querystring: z.object({
                 before: z.string().optional(),

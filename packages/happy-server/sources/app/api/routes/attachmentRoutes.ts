@@ -15,6 +15,7 @@ import * as crypto from 'crypto';
 import { Fastify } from '../types';
 import { db } from '@/storage/db';
 import { s3client, s3bucket, isLocalStorage, getLocalFilesDir, putLocalFile } from '@/storage/files';
+import { requireSessionRole } from '@/app/session/sessionAccess';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const PRESIGNED_TTL_SECONDS = 15 * 60; // 15 minutes (design spec)
@@ -95,7 +96,7 @@ export function attachmentRoutes(app: Fastify) {
                 429: z.object({ error: z.string() }),
             },
         },
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
     }, async (request, reply) => {
         const { sessionId } = request.params;
         const { size } = request.body;
@@ -165,7 +166,7 @@ export function attachmentRoutes(app: Fastify) {
                 413: z.object({ error: z.string() }),
             },
         },
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
     }, async (request, reply) => {
         if (!isLocalStorage()) {
             return reply.code(404).send({ error: 'Direct upload not available in S3 mode' });
@@ -226,10 +227,10 @@ export function attachmentRoutes(app: Fastify) {
         const { ref } = request.body;
         const userId = request.userId;
 
-        const session = await db.session.findFirst({
-            where: { id: sessionId, accountId: userId },
-        });
-        if (!session) {
+        // Owner or a read grant (DROVE-388): a grantee can open what the
+        // session shows it, and attachments are part of that.
+        const access = await requireSessionRole(userId, sessionId, 'read');
+        if (!access) {
             return reply.code(404).send({ error: 'Session not found' });
         }
 
@@ -271,11 +272,9 @@ export function attachmentRoutes(app: Fastify) {
         const { sessionId, attachmentFile } = request.params;
         const userId = request.userId;
 
-        // Verify session ownership
-        const session = await db.session.findFirst({
-            where: { id: sessionId, accountId: userId },
-        });
-        if (!session) {
+        // Owner or a read grant (DROVE-388).
+        const access = await requireSessionRole(userId, sessionId, 'read');
+        if (!access) {
             return reply.code(404).send({ error: 'Session not found' });
         }
 

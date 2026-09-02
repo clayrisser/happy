@@ -84,7 +84,7 @@ async function hasActiveSubscription(userId: string): Promise<boolean> {
 
 export function voiceRoutes(app: Fastify) {
     app.post('/v1/voice/conversations', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: {
             body: z.object({
                 agentId: z.string(),
@@ -195,7 +195,7 @@ export function voiceRoutes(app: Fastify) {
      * Queries ElevenLabs directly — no local DB needed.
      */
     app.get('/v1/voice/usage', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: {
             response: {
                 200: VoiceUsageResponseSchema,

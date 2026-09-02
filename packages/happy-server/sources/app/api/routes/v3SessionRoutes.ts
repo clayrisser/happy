@@ -4,6 +4,7 @@ import { allocateSessionSeqBatch, allocateUserSeq } from "@/storage/seq";
 import { randomKeyNaked } from "@/utils/randomKeyNaked";
 import { z } from "zod";
 import { type Fastify } from "../types";
+import { requireSessionRole, resolveSessionAccess, roleAllows } from "@/app/session/sessionAccess";
 
 // Pagination contract:
 //   - after_seq=N  → forward sync: messages with seq > N, ordered ASC.
@@ -75,15 +76,9 @@ export function v3SessionRoutes(app: Fastify) {
         const { sessionId } = request.params;
         const { after_seq, before_seq, limit } = request.query;
 
-        const session = await db.session.findFirst({
-            where: {
-                id: sessionId,
-                accountId: userId
-            },
-            select: { id: true }
-        });
-
-        if (!session) {
+        // Owner or a read grant; anything else is not found (DROVE-388).
+        const access = await requireSessionRole(userId, sessionId, 'read');
+        if (!access) {
             return reply.code(404).send({ error: 'Session not found' });
         }
 
@@ -133,17 +128,18 @@ export function v3SessionRoutes(app: Fastify) {
         const { sessionId } = request.params;
         const { messages } = request.body;
 
-        const session = await db.session.findFirst({
-            where: {
-                id: sessionId,
-                accountId: userId
-            },
-            select: { id: true }
-        });
-
-        if (!session) {
+        // Owner or an answer grant. A read grant sees the session and is
+        // told so; no grant at all is not found (DROVE-388). Everything
+        // written or emitted below runs under the OWNER's id, because the
+        // socket rooms the CLI and the owner's phone sit in are keyed by it.
+        const access = await resolveSessionAccess(userId, sessionId);
+        if (!access) {
             return reply.code(404).send({ error: 'Session not found' });
         }
+        if (!roleAllows(access.role, 'answer')) {
+            return reply.code(403).send({ error: 'read-only-grant' });
+        }
+        const ownerId = access.ownerId;
 
         const firstMessageByLocalId = new Map<string, { localId: string; content: string }>();
         for (const message of messages) {
@@ -217,7 +213,7 @@ export function v3SessionRoutes(app: Fastify) {
             if (!content) {
                 continue;
             }
-            const updSeq = await allocateUserSeq(userId);
+            const updSeq = await allocateUserSeq(ownerId);
             const updatePayload = buildNewMessageUpdate({
                 ...message,
                 content: {
@@ -227,7 +223,7 @@ export function v3SessionRoutes(app: Fastify) {
             }, sessionId, updSeq, randomKeyNaked(12));
 
             eventRouter.emitUpdate({
-                userId,
+                userId: ownerId,
                 payload: updatePayload,
                 recipientFilter: { type: 'all-interested-in-session', sessionId }
             });

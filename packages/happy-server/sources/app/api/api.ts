@@ -24,6 +24,7 @@ import { kvRoutes } from "./routes/kvRoutes";
 import { v3SessionRoutes } from "./routes/v3SessionRoutes";
 import { attachmentRoutes } from "./routes/attachmentRoutes";
 import { projectRoutes } from "./routes/projectRoutes";
+import { sessionGrantRoutes } from "./routes/sessionGrantRoutes";
 import { isLocalStorage, getLocalFilesDir } from "@/storage/files";
 import * as path from "path";
 import * as fs from "fs";
@@ -101,6 +102,7 @@ export async function startApi(opts: StartApiOptions = {}) {
     authRoutes(typed);
     pushRoutes(typed);
     sessionRoutes(typed);
+    sessionGrantRoutes(typed);
     accountRoutes(typed);
     connectRoutes(typed);
     machinesRoutes(typed);
