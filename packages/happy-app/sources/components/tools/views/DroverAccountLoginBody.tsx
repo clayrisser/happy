@@ -5,7 +5,6 @@ import {
     Platform,
     Share,
     Text,
-    TextInput,
     TouchableOpacity,
     View,
 } from 'react-native';
@@ -13,7 +12,7 @@ import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { accountLoginCard, clipboardCode, codeToSend, hostOf, type AccountLoginCard } from './droverAccountLogin';
+import { accountLoginCard, clipboardCode, hostOf, loginControls, type AccountLoginCard } from './droverAccountLogin';
 
 /**
  * The account-login card's BODY, with no idea where it is drawn (DROVE-212).
@@ -35,23 +34,34 @@ import { accountLoginCard, clipboardCode, codeToSend, hostOf, type AccountLoginC
  *   one tap away on the icon beside it, for when the link wants to go somewhere
  *   other than the default browser, which is what Clay asked for in DROVE-61.
  *
- *   THE CODE COMES BACK. It is typed here and sent as the question's text
+ *   THE CODE COMES BACK, when there is one. It is sent as the question's text
  *   answer, which lands on the waiting `claude auth login`'s stdin. Nothing
- *   stores it, nothing else is sent it, and the field is cleared on submit.
+ *   stores it and nothing else is sent it.
  *
- * ONE TAP FOR THE CODE (DROVE-335). Clay: "for the login I was kinda expecting
- * a paste and submit button instead of having to paste in a field and submit."
- * He is right — the code is already on the clipboard when he comes back from
- * the browser, and long-press, wait, Paste, Send is four gestures to move a
- * string the phone is already holding. Paste and send does it in one. The field
- * stays exactly as it was, because a code read aloud or typed from a laptop has
- * nowhere else to go.
+ * ONE BUTTON, NOT A FORM (DROVE-351). Clay, with the card photographed: "for
+ * cursor there is no code to send. For ones where there IS a code, like Claude,
+ * we don't need the input form, just do paste and send."
+ *
+ * So the controls are read off the card rather than drawn the same for every
+ * login, and `loginControls` is where that decision lives:
+ *
+ *   CURSOR HAS NO CODE STEP AT ALL. `cursor-agent login` polls its own API
+ *   until a browser approves, so the paste button, the field and Send code
+ *   were three controls that could not do anything — under prose on the same
+ *   card that said "Nothing to send back — the login finishes on its own".
+ *   Cancel is the only answer a cursor login has.
+ *
+ *   CLAUDE GETS PASTE AND SEND, and nothing else. DROVE-335 added it beside
+ *   the field; the code is on the clipboard when he comes back from the
+ *   browser, so the field and its Send row were the slow path nobody took.
  *
  * What the button does NOT do is send whatever it finds. The answer goes to a
  * `claude auth login` blocked on stdin with two tries, so a clipboard holding
  * the sign-in link — one tap away on the row above, and what was on the
  * clipboard a minute ago — would spend one of them and come back "Invalid
- * code". `clipboardCode` judges it first and says why in a sentence.
+ * code". `clipboardCode` judges it first and says why in a sentence, and the
+ * button stays live so a re-copied clipboard is one more tap and not a
+ * dead end.
  */
 export interface DroverAccountLoginBodyProps {
     /** The mirrored card's arguments, straight off the request. */
@@ -70,7 +80,6 @@ export const DroverAccountLoginBody = React.memo<DroverAccountLoginBodyProps>((
 ) => {
     const { theme } = useUnistyles();
     const card = React.useMemo<AccountLoginCard | null>(() => accountLoginCard(args), [args]);
-    const [code, setCode] = React.useState('');
     const [busy, setBusy] = React.useState(false);
     const [sent, setSent] = React.useState<'code' | 'cancel' | null>(null);
     /** Why the last one-tap paste was not sent, in one sentence (DROVE-335). */
@@ -105,20 +114,14 @@ export const DroverAccountLoginBody = React.memo<DroverAccountLoginBodyProps>((
         await Linking.openURL(card.url);
     }, [card]);
 
-    const submit = React.useCallback(async () => {
-        const value = code && codeToSend(code);
-        if (!value) return;
-        setCode('');
-        setRefused(null);
-        await answer({ code: value }, 'code');
-    }, [answer, code]);
-
     /**
-     * The clipboard, read and sent in one tap (DROVE-335).
+     * The clipboard, read and sent in one tap (DROVE-335), and now the only way
+     * a code leaves this card (DROVE-351).
      *
-     * A refusal fills the field rather than throwing the paste away, so the bad
-     * value is visible, fixable and sendable by hand — Clay can see what his
-     * clipboard actually had instead of being told no by a button.
+     * A refusal says what was wrong and LEAVES THE BUTTON LIVE. That is the
+     * whole recovery now that there is no field to fall back into: copy the
+     * right thing and tap again. Nothing about the card is spent by a refusal —
+     * nothing was sent, so the login on the Mac is still waiting.
      *
      * A clipboard that cannot be read at all (web without permission, a
      * platform that refuses) is refused in the same place and the same voice,
@@ -131,17 +134,15 @@ export const DroverAccountLoginBody = React.memo<DroverAccountLoginBodyProps>((
         try {
             raw = await Clipboard.getStringAsync();
         } catch {
-            setRefused('The clipboard could not be read here, so paste the code into the box below instead.');
+            setRefused('The clipboard could not be read here, so the code could not be sent.');
             return;
         }
         const judged = clipboardCode(raw);
         if ('refused' in judged) {
             setRefused(judged.refused);
-            setCode(typeof raw === 'string' ? raw.trim() : '');
             return;
         }
         setRefused(null);
-        setCode('');
         await answer({ code: judged.code }, 'code');
     }, [answer, busy]);
 
@@ -151,7 +152,7 @@ export const DroverAccountLoginBody = React.memo<DroverAccountLoginBodyProps>((
     // outcome worth refusing outright.
     if (!card) return null;
 
-    const ready = codeToSend(code) !== null;
+    const controls = loginControls(card.harness);
     const live = canInteract && sent === null;
 
     return (
@@ -191,35 +192,33 @@ export const DroverAccountLoginBody = React.memo<DroverAccountLoginBodyProps>((
                 <Text style={styles.reasonText}>Login cancelled.</Text>
             ) : (
                 <>
-                    <TouchableOpacity
-                        style={styles.pasteButton}
-                        onPress={pasteAndSend}
-                        disabled={!live || busy}
-                        activeOpacity={0.7}
-                        accessibilityRole="button"
-                        accessibilityLabel="Paste the code from the clipboard and send it"
-                    >
-                        <Ionicons name="clipboard-outline" size={18} color={theme.colors.text} />
-                        <Text style={styles.pasteButtonText}>Paste and send</Text>
-                    </TouchableOpacity>
-                    {refused ? <Text style={styles.refusedText}>{refused}</Text> : null}
-                    <TextInput
-                        style={styles.codeInput}
-                        value={code}
-                        onChangeText={(next) => { setCode(next); setRefused(null); }}
-                        editable={live}
-                        placeholder="Paste the code from that page"
-                        placeholderTextColor={theme.colors.textSecondary}
-                        autoCapitalize="none"
-                        autoCorrect={false}
-                        autoComplete="off"
-                        spellCheck={false}
-                        // Not `secureTextEntry`: a code that cannot be read back
-                        // cannot be checked against the page it came from, and it
-                        // is single-use and already on screen in the browser.
-                        onSubmitEditing={submit}
-                        returnKeyType="send"
-                    />
+                    {/* The controls this login actually has, and no others
+                        (DROVE-351). A cursor card gets Cancel alone, because
+                        approving in the browser IS the second half. */}
+                    {controls.includes('paste') ? (
+                        <>
+                            <TouchableOpacity
+                                style={[styles.pasteButton, busy && styles.pasteButtonBusy]}
+                                onPress={pasteAndSend}
+                                disabled={!live || busy}
+                                activeOpacity={0.7}
+                                accessibilityRole="button"
+                                accessibilityLabel="Paste the code from the clipboard and send it"
+                            >
+                                {busy ? (
+                                    <ActivityIndicator size="small" color={theme.colors.text} />
+                                ) : (
+                                    <>
+                                        <Ionicons name="clipboard-outline" size={18} color={theme.colors.text} />
+                                        <Text style={styles.pasteButtonText}>Paste and send</Text>
+                                    </>
+                                )}
+                            </TouchableOpacity>
+                            {/* Under the button it belongs to, and the button
+                                stays live: copy the right thing, tap again. */}
+                            {refused ? <Text style={styles.refusedText}>{refused}</Text> : null}
+                        </>
+                    ) : null}
                     <View style={styles.actionsContainer}>
                         <TouchableOpacity
                             style={styles.cancelButton}
@@ -228,22 +227,6 @@ export const DroverAccountLoginBody = React.memo<DroverAccountLoginBodyProps>((
                             activeOpacity={0.7}
                         >
                             <Text style={styles.cancelButtonText}>{card.cancelLabel}</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={[
-                                styles.submitButton,
-                                ready && !busy && styles.submitButtonReady,
-                                (!ready || busy) && styles.submitButtonDisabled,
-                            ]}
-                            onPress={submit}
-                            disabled={!ready || busy || !live}
-                            activeOpacity={0.7}
-                        >
-                            {busy ? (
-                                <ActivityIndicator size="small" color={theme.colors.text} />
-                            ) : (
-                                <Text style={styles.submitButtonText}>Send code</Text>
-                            )}
                         </TouchableOpacity>
                     </View>
                 </>
@@ -336,20 +319,12 @@ const styles = StyleSheet.create((theme) => ({
         fontWeight: '500',
         color: theme.colors.text,
     },
+    pasteButtonBusy: {
+        opacity: 0.5,
+    },
     refusedText: {
         fontSize: 13,
         color: theme.colors.textDestructive,
-    },
-    codeInput: {
-        borderWidth: 1,
-        borderColor: theme.colors.divider,
-        borderRadius: 8,
-        paddingHorizontal: 12,
-        paddingVertical: 12,
-        minHeight: 44,
-        fontSize: 14,
-        color: theme.colors.text,
-        backgroundColor: Platform.select({ web: 'transparent', default: theme.colors.surface }),
     },
     actionsContainer: {
         flexDirection: 'row',
@@ -368,28 +343,6 @@ const styles = StyleSheet.create((theme) => ({
     },
     cancelButtonText: {
         color: theme.colors.textSecondary,
-        fontSize: 14,
-        fontWeight: '600',
-    },
-    submitButton: {
-        backgroundColor: Platform.select({ web: theme.colors.button.primary.background, default: theme.colors.surfaceHighest }),
-        borderWidth: Platform.select({ web: 0, default: 1 }),
-        borderColor: theme.colors.divider,
-        paddingHorizontal: 20,
-        paddingVertical: 12,
-        borderRadius: 8,
-        alignItems: 'center',
-        justifyContent: 'center',
-        minHeight: 44,
-    },
-    submitButtonDisabled: {
-        opacity: 0.5,
-    },
-    submitButtonReady: {
-        borderColor: theme.colors.radio.active,
-    },
-    submitButtonText: {
-        color: Platform.select({ web: theme.colors.button.primary.tint, default: theme.colors.text }),
         fontSize: 14,
         fontWeight: '600',
     },

@@ -2,8 +2,8 @@
  * Reading the account-login card's input (DROVE-61).
  *
  * Split out of the view for the usual reason: the rules about what is a usable
- * login link, and what a code has to look like before the Send button lights
- * up, are worth testing without a renderer.
+ * login link, which controls a card gets, and what a clipboard has to hold
+ * before any of it is sent, are worth testing without a renderer.
  */
 
 export interface AccountLoginCard {
@@ -11,6 +11,76 @@ export interface AccountLoginCard {
     header: string;
     reason: string;
     cancelLabel: string;
+    /** Whose login this is, and therefore what the card draws (DROVE-351). */
+    harness: LoginHarness;
+}
+
+/**
+ * Which login a card belongs to (DROVE-351).
+ *
+ * It decides whether there is a code step at all, so it is not cosmetic.
+ * `claude auth login` prints a URL and then BLOCKS on a code typed back in.
+ * `cursor-agent login` prints a URL and then polls its own API until a browser
+ * approves it — there is no code, there never was, and drover-cursor-login
+ * already says so where it raises the card: a non-cancel answer "is not an
+ * error and not an answer", the card is simply raised again.
+ */
+export type LoginHarness = 'claude' | 'cursor';
+
+/**
+ * The controls the card draws under the link row, in the order it draws them.
+ *
+ * `field` and `send` are in the vocabulary with nothing returning them, and
+ * that is the point: a bar that says "no text field" has to be able to SAY
+ * text field, or the spec asserting their absence asserts nothing.
+ */
+export type LoginControl = 'paste' | 'field' | 'send' | 'cancel';
+
+/** A cursor host, port and subdomain included. */
+const cursorHost = /(^|\.)cursor\.(com|sh)$/i;
+
+/**
+ * Whose login this is, read off the card rather than off the screen.
+ *
+ * The three surfaces that draw this body — the Accounts page, the gates screen
+ * and the session overlay — all hand it the mirrored request's arguments and
+ * nothing else, so an answer that came from the screen would be right on one
+ * of them and absent on the other two. The card is the only thing all three
+ * share.
+ *
+ * Two independent signals, either one enough. The header is drover's own
+ * string ("Log in to Cursor for <label>"), and the link is the one the login
+ * printed — cursor's is cursor.com/loginDeepControl, Claude's is on claude.com.
+ * Unknown reads as claude, which is what `harness` absent means everywhere
+ * else in this app and what every card minted before cursor existed was.
+ */
+export function loginHarness(card: { header: string; url: string }): LoginHarness {
+    if (/\bcursor\b/i.test(card.header)) return 'cursor';
+    if (cursorHost.test(hostOf(card.url).replace(/:\d+$/, ''))) return 'cursor';
+    return 'claude';
+}
+
+/**
+ * What the card offers back, which is the whole of DROVE-351.
+ *
+ * Clay, with the cursor card photographed: "for cursor there is no code to
+ * send. For ones where there IS a code, like Claude, we don't need the input
+ * form, just do paste and send."
+ *
+ * CURSOR GETS NO CODE STEP. The card in that screenshot said "Nothing to send
+ * back — the login finishes on its own" and then drew a paste button, a code
+ * field and a Send code button underneath it. Three controls that cannot do
+ * anything: the login finishes in the browser, and whatever is typed here is
+ * discarded by the script and the card raised again. Cancel is the only answer
+ * a cursor login has, so it is the only one offered.
+ *
+ * CLAUDE GETS ONE BUTTON. The code is on the clipboard when he comes back from
+ * the browser — that IS the flow — so Paste and send does it in one tap
+ * (DROVE-335), and the field and the Send code row it was added beside are now
+ * the slow path nobody takes.
+ */
+export function loginControls(harness: LoginHarness): LoginControl[] {
+    return harness === 'cursor' ? ['cancel'] : ['paste', 'cancel'];
 }
 
 /**
@@ -27,31 +97,18 @@ export function accountLoginCard(input: unknown): AccountLoginCard | null {
     const raw = input as Record<string, unknown>;
     const url = typeof raw.url === 'string' ? raw.url.trim() : '';
     if (!url.startsWith('https://')) return null;
+    const header = typeof raw.header === 'string' && raw.header.trim()
+        ? raw.header.trim()
+        : 'Log in to Claude';
     return {
         url,
-        header: typeof raw.header === 'string' && raw.header.trim()
-            ? raw.header.trim()
-            : 'Log in to Claude',
+        header,
         reason: typeof raw.reason === 'string' ? raw.reason.trim() : '',
         cancelLabel: typeof raw.cancelLabel === 'string' && raw.cancelLabel.trim()
             ? raw.cancelLabel.trim()
             : 'Cancel',
+        harness: loginHarness({ header, url }),
     };
-}
-
-/**
- * What actually gets sent, or null when there is nothing to send yet.
- *
- * Trimmed, because a code copied off a web page arrives with whitespace on it
- * more often than not, and the bus refuses a blank text resolution — which
- * would surface as a submit that silently did nothing.
- *
- * Not otherwise touched. A Claude Code login code is `<code>#<state>`, and
- * "tidying" the middle of an opaque token is how a correct paste becomes a 400.
- */
-export function codeToSend(typed: string): string | null {
-    const trimmed = typed.trim();
-    return trimmed.length > 0 ? trimmed : null;
 }
 
 /** The host, for a line under the link that says where it goes. */

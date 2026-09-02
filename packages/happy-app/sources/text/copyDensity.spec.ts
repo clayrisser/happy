@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { AUTO_ACCEPT_SUBTITLE } from '../components/autoAcceptRow';
 import { MODE_COPY } from '../sync/droverChannels';
-import { accountGroupFooter } from '../sync/machineAccountsFlow';
+import { accountGroupFooter, addAccountStatus } from '../sync/machineAccountsFlow';
 import { mcpOnlyFooter } from '../sync/mcpText';
 
 /**
@@ -166,6 +166,34 @@ describe('copy density: generated strings', () => {
         // not carry, so it is the one the short version has to keep.
         expect(accountGroupFooter('cursor', true)).toMatch(/tokens/);
         expect(accountGroupFooter('cursor', true)).toMatch(/flip/);
+    });
+
+    it('the login card says one fragment under its title (DROVE-351)', () => {
+        // The card Clay photographed carried a four-line paragraph over
+        // controls that contradicted it, and the paragraph was the half this
+        // rule governs. Only the two link-ready rows are pinned here: they are
+        // the card's own prose, and the rest of `addAccountStatus` is the
+        // waiting and the outcome, which DROVE-346 did not scribble out.
+        const linkReady = (harness: 'claude' | 'cursor') => addAccountStatus({
+            kind: 'waiting',
+            harness,
+            startedAt: 0,
+            before: [],
+            stale: [],
+            linkReady: true,
+            linkSeen: true,
+            linkLate: false,
+        })!;
+        for (const harness of ['claude', 'cursor'] as const) {
+            const { detail } = linkReady(harness);
+            expect(detail.length, `${harness}: "${detail}"`).toBeLessThanOrEqual(subtitleMaxChars);
+            // A fragment, like the rows it sits among: no full stop, and no
+            // capital where the neighbours have none.
+            expect(detail, harness).not.toMatch(/\.$/);
+            expect(detail[0], harness).toBe(detail[0].toLowerCase());
+            // One fragment, not two clauses wearing a comma.
+            expect(detail, harness).not.toMatch(/[;\u2014]/);
+        }
     });
 
     it('the MCP footer is one line and drops the counts and the apology', () => {
