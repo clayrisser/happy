@@ -1,4 +1,4 @@
-import { eventRouter, buildNewSessionUpdate, buildUpdateSessionUpdate, buildSessionActivityEphemeral } from "@/app/events/eventRouter";
+import { eventRouter, buildNewSessionUpdate, buildUpdateSessionUpdate, buildSessionActivityEphemeral, buildDeleteSessionUpdate, sessionGrantRoom } from "@/app/events/eventRouter";
 import { type Fastify } from "../types";
 import { db } from "@/storage/db";
 import { z } from "zod";
@@ -8,7 +8,8 @@ import { randomKeyNaked } from "@/utils/randomKeyNaked";
 import { allocateUserSeq } from "@/storage/seq";
 import { sessionDelete } from "@/app/session/sessionDelete";
 import { activityCache } from "@/app/presence/sessionCache";
-import { callerAccess, grantsForCaller, requireSessionRole, sessionsVisibleTo } from "@/app/session/sessionAccess";
+import { callerAccess, callerFor, grantsForCaller, requireSessionRole, sessionsVisibleTo, type Caller } from "@/app/session/sessionAccess";
+import { acceptEscrowKey, canManage } from "@/app/relay/relayConfig";
 
 // What every list endpoint selects. `accountId` and the caller's own grant
 // are what callerAccess needs to hand a grantee the re-wrapped key in place
@@ -24,6 +25,8 @@ function listSelect(userId: string) {
         agentState: true,
         agentStateVersion: true,
         dataEncryptionKey: true,
+        escrowKey: true,
+        wasManagedAt: true,
         projectId: true,
         active: true,
         lastActiveAt: true,
@@ -36,8 +39,8 @@ type ListRow = Prisma.SessionGetPayload<{ select: ReturnType<typeof listSelect> 
 
 // A session row on the wire, for the caller: an owner sees its own wrapped
 // key, a grantee sees the grant's, and both learn the role and the owner.
-function listRow(v: ListRow, userId: string) {
-    const access = callerAccess(v, userId);
+function listRow(v: ListRow, caller: Caller) {
+    const access = callerAccess(v, caller);
     if (!access) {
         return null;
     }
@@ -55,15 +58,108 @@ function listRow(v: ListRow, userId: string) {
         dataEncryptionKey: access.dataEncryptionKey,
         projectId: v.projectId,
         role: access.role,
-        ownerId: access.ownerId
+        ownerId: access.ownerId,
+        // The session's kind (DROVE-388, decision 0c): the list draws the
+        // glyph and the sheet the switch from these two.
+        managed: v.escrowKey !== null,
+        wasManagedAt: v.wasManagedAt ? v.wasManagedAt.getTime() : null
     };
 }
 
-function listRows(rows: ListRow[], userId: string) {
-    return rows.map((v) => listRow(v, userId)).filter((v) => v !== null);
+async function listRows(rows: ListRow[], userId: string) {
+    // One caller lookup per list, and only on a managed relay (callerFor).
+    const caller = await callerFor(userId);
+    return rows.map((v) => listRow(v, caller)).filter((v) => v !== null);
 }
 
 export function sessionRoutes(app: Fastify) {
+
+    // The Managed switch, ON (DROVE-388, decision 0c): the owner's app opens
+    // the session's own dataEncryptionKey with its box secret key, wraps the
+    // key to the relay's escrow public key (GET /v1/relay) and puts it here;
+    // the relay checks that the wrap opens and stores it. From then on the
+    // relay can share the session for the owner. Owner only; a relay that
+    // cannot manage refuses, because it has no key to open the wrap with and
+    // must not hold one it cannot use. Idempotent: a session already managed
+    // takes the new wrap.
+    app.put('/v1/sessions/:sessionId/escrow', {
+        preHandler: [app.authenticate, app.requireOwner],
+        schema: {
+            params: z.object({ sessionId: z.string() }),
+            body: z.object({ escrowKey: z.string() })
+        }
+    }, async (request, reply) => {
+        const userId = request.userId;
+        const { sessionId } = request.params;
+        if (!canManage()) {
+            return reply.code(409).send({ error: 'relay-cannot-manage' });
+        }
+        const session = await db.session.findFirst({
+            where: { id: sessionId, accountId: userId },
+            select: { id: true, dataEncryptionKey: true, wasManagedAt: true }
+        });
+        if (!session) {
+            return reply.code(404).send({ error: 'Session not found' });
+        }
+        if (!session.dataEncryptionKey) {
+            return reply.code(409).send({ error: 'session-not-shareable' });
+        }
+        const escrowKey = acceptEscrowKey(request.body.escrowKey);
+        if (!escrowKey) {
+            return reply.code(400).send({ error: 'escrow-key-malformed' });
+        }
+        await db.session.update({ where: { id: sessionId }, data: { escrowKey } });
+        log({ module: 'session-escrow', userId, sessionId }, `Session made managed by its owner`);
+        return reply.send({ managed: true, wasManagedAt: session.wasManagedAt ? session.wasManagedAt.getTime() : null });
+    });
+
+    // The Managed switch, OFF: the relay deletes its wrap and, with it, the
+    // grants that had no key of their own (they were the relay's to honour;
+    // the owner re-shares end to end if wanted). wasManagedAt records that
+    // the relay held the key until now and may have read the session; it
+    // never clears. Idempotent on a session already private.
+    app.delete('/v1/sessions/:sessionId/escrow', {
+        preHandler: [app.authenticate, app.requireOwner],
+        schema: {
+            params: z.object({ sessionId: z.string() })
+        }
+    }, async (request, reply) => {
+        const userId = request.userId;
+        const { sessionId } = request.params;
+        const session = await db.session.findFirst({
+            where: { id: sessionId, accountId: userId },
+            select: { id: true, escrowKey: true, wasManagedAt: true }
+        });
+        if (!session) {
+            return reply.code(404).send({ error: 'Session not found' });
+        }
+        if (!session.escrowKey) {
+            return reply.send({ managed: false, wasManagedAt: session.wasManagedAt ? session.wasManagedAt.getTime() : null, droppedGrants: 0 });
+        }
+        const now = new Date();
+        const dropped = await db.$transaction(async (tx) => {
+            const keyless = await tx.sessionGrant.findMany({
+                where: { sessionId, wrappedKey: null },
+                select: { granteeAccountId: true }
+            });
+            await tx.sessionGrant.deleteMany({ where: { sessionId, wrappedKey: null } });
+            await tx.session.update({ where: { id: sessionId }, data: { escrowKey: null, wasManagedAt: now } });
+            return keyless.map((g) => g.granteeAccountId);
+        });
+        log({ module: 'session-escrow', userId, sessionId, droppedGrants: dropped.length }, `Session made private by its owner`);
+        // Each dropped grantee stops hearing the session and drops it from
+        // its list, exactly as a revoke does.
+        for (const granteeAccountId of dropped) {
+            eventRouter.leaveUserScoped(granteeAccountId, sessionGrantRoom(sessionId));
+            const updSeq = await allocateUserSeq(granteeAccountId);
+            eventRouter.emitUpdate({
+                userId: granteeAccountId,
+                payload: buildDeleteSessionUpdate(sessionId, updSeq, randomKeyNaked(12)),
+                recipientFilter: { type: 'user-scoped-only' }
+            });
+        }
+        return reply.send({ managed: false, wasManagedAt: now.getTime(), droppedGrants: dropped.length });
+    });
 
     // Sessions API
     app.get('/v1/sessions', {
@@ -79,7 +175,7 @@ export function sessionRoutes(app: Fastify) {
         });
 
         return reply.send({
-            sessions: listRows(sessions, userId).map((v) => ({ ...v, lastMessage: null }))
+            sessions: (await listRows(sessions, userId)).map((v) => ({ ...v, lastMessage: null }))
         });
     });
 
@@ -107,7 +203,7 @@ export function sessionRoutes(app: Fastify) {
         });
 
         return reply.send({
-            sessions: listRows(sessions, userId)
+            sessions: await listRows(sessions, userId)
         });
     });
 
@@ -189,6 +285,10 @@ export function sessionRoutes(app: Fastify) {
                 metadata: z.string(),
                 agentState: z.string().nullish(),
                 dataEncryptionKey: z.string().nullish(),
+                // A managed session: the same key wrapped to the relay's
+                // escrow public key (GET /v1/relay). Absent, the session is
+                // private (DROVE-388, decision 0c).
+                escrowKey: z.string().nullish(),
                 projectId: z.string().nullish()
             })
         },
@@ -196,6 +296,19 @@ export function sessionRoutes(app: Fastify) {
     }, async (request, reply) => {
         const userId = request.userId;
         const { tag, metadata, dataEncryptionKey, projectId } = request.body;
+
+        // A wrap the relay cannot open is refused rather than stored: a
+        // stored wrap that opens to nothing would make every later grant a
+        // key nobody can use, and the CLI can only fix it now. A relay with
+        // no key of its own says so, rather than quietly making the session
+        // private when the CLI asked for managed.
+        if (request.body.escrowKey && !canManage()) {
+            return reply.code(409).send({ error: 'relay-cannot-manage' });
+        }
+        const escrowKey = acceptEscrowKey(request.body.escrowKey);
+        if (request.body.escrowKey && !escrowKey) {
+            return reply.code(400).send({ error: 'escrow-key-malformed' });
+        }
 
         if (projectId !== undefined && projectId !== null) {
             const project = await db.project.findFirst({
@@ -215,6 +328,16 @@ export function sessionRoutes(app: Fastify) {
             log({ module: 'session-create', sessionId: session.id, userId, tag }, `Found existing session: ${session.id} for tag ${tag}`);
 
             let sessionForResponse = session;
+            // A CLI reconnecting to a private session and asking for managed
+            // brings the escrow wrap with it; store it once. The owner turns
+            // it off from the sheet, never the CLI by omission.
+            if (escrowKey && !session.escrowKey) {
+                sessionForResponse = await db.session.update({
+                    where: { id: session.id },
+                    data: { escrowKey }
+                });
+                log({ module: 'session-create', sessionId: session.id, userId }, `Session escrow key stored on reconnect`);
+            }
             if (projectId !== undefined && projectId !== session.projectId) {
                 sessionForResponse = await db.session.update({
                     where: { id: session.id },
@@ -245,6 +368,8 @@ export function sessionRoutes(app: Fastify) {
                     activeAt: sessionForResponse.lastActiveAt.getTime(),
                     createdAt: sessionForResponse.createdAt.getTime(),
                     updatedAt: sessionForResponse.updatedAt.getTime(),
+                    managed: sessionForResponse.escrowKey !== null,
+                    wasManagedAt: sessionForResponse.wasManagedAt ? sessionForResponse.wasManagedAt.getTime() : null,
                     lastMessage: null
                 }
             });
@@ -261,10 +386,11 @@ export function sessionRoutes(app: Fastify) {
                     tag: tag,
                     metadata: metadata,
                     dataEncryptionKey: dataEncryptionKey ? new Uint8Array(Buffer.from(dataEncryptionKey, 'base64')) : undefined,
+                    escrowKey: escrowKey ?? undefined,
                     projectId: projectId ?? null
                 }
             });
-            log({ module: 'session-create', sessionId: session.id, userId }, `Session created: ${session.id}`);
+            log({ module: 'session-create', sessionId: session.id, userId }, `Session created: ${session.id}${escrowKey ? ' (managed)' : ' (private)'}`);
 
             // Emit new session update
             const updatePayload = buildNewSessionUpdate(session, updSeq, randomKeyNaked(12));
@@ -295,6 +421,8 @@ export function sessionRoutes(app: Fastify) {
                     activeAt: session.lastActiveAt.getTime(),
                     createdAt: session.createdAt.getTime(),
                     updatedAt: session.updatedAt.getTime(),
+                    managed: session.escrowKey !== null,
+                    wasManagedAt: null,
                     lastMessage: null
                 }
             });

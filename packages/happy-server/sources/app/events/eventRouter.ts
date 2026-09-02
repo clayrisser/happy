@@ -438,6 +438,8 @@ export function buildNewSessionUpdate(session: {
     agentState: string | null;
     agentStateVersion: number;
     dataEncryptionKey: Uint8Array | null;
+    escrowKey?: Uint8Array | null;
+    wasManagedAt?: Date | null;
     projectId: string | null;
     active: boolean;
     lastActiveAt: Date;
@@ -460,7 +462,9 @@ export function buildNewSessionUpdate(session: {
             active: session.active,
             activeAt: session.lastActiveAt.getTime(),
             createdAt: session.createdAt.getTime(),
-            updatedAt: session.updatedAt.getTime()
+            updatedAt: session.updatedAt.getTime(),
+            managed: (session.escrowKey ?? null) !== null,
+            wasManagedAt: session.wasManagedAt ? session.wasManagedAt.getTime() : null
         },
         createdAt: Date.now()
     };

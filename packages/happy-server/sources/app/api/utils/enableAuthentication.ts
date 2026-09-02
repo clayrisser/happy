@@ -1,13 +1,26 @@
 import { Fastify } from "../types";
 import { debug } from "@/utils/log";
 import { auth } from "@/app/auth/auth";
-import { getAccountKind, registrationPolicy } from "@/app/auth/accountKind";
+import { getAccountKind, isAccountAdmin, registrationPolicy } from "@/app/auth/accountKind";
+import { announceRelay } from "@/app/relay/relayConfig";
 import { log } from "@/utils/log";
 
 export function enableAuthentication(app: Fastify) {
     // Both entrypoints (main.ts and the self-host standalone) pass through
     // here, so an unknown ACCOUNT_REGISTRATION fails the boot in either.
     log({ module: 'auth' }, `Account registration policy: ${registrationPolicy()}`);
+    // Same boot-time discipline for the relay's capabilities: a malformed
+    // escrow key or sharing word does not start (relayConfig.ts).
+    announceRelay();
+
+    // Runs AFTER authenticate. The "may add machines" switch and the account
+    // list are admin only (relayRoutes.ts).
+    app.decorate('requireAdmin', async function (request: any, reply: any) {
+        if (!(await isAccountAdmin(request.userId))) {
+            debug({ module: 'auth' }, `auth:refused reason=admin-only userId=${request.userId}`);
+            return reply.code(403).send({ error: 'admin-only' });
+        }
+    });
 
     // Runs AFTER authenticate: `preHandler: [app.authenticate, app.requireOwner]`.
     // A guest account (DROVE-388) reaches only what it was granted; every

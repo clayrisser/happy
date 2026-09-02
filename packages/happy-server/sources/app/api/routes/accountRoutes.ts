@@ -38,7 +38,8 @@ export function accountRoutes(app: Fastify) {
                 avatar: true,
                 githubUser: true,
                 kind: true,
-                contentPublicKey: true
+                contentPublicKey: true,
+                newSessionsManaged: true
             }
         });
         const connectedVendors = new Set((await db.serviceAccountToken.findMany({ where: { accountId: userId } })).map(t => t.vendor));
@@ -54,8 +55,30 @@ export function accountRoutes(app: Fastify) {
             // DROVE-388: which chrome the app draws, and the key an owner
             // wraps a session key to when it grants this account a session.
             kind: user.kind,
-            contentPublicKey: encodeBoxPublicKey(user.contentPublicKey)
+            contentPublicKey: encodeBoxPublicKey(user.contentPublicKey),
+            // Whether a session this account's CLI creates is managed when
+            // nothing on the command line or the machine says (decision 0c).
+            newSessionsManaged: user.newSessionsManaged
         });
+    });
+
+    // The account's "new sessions managed" default (DROVE-388, decision 0c).
+    // In the clear on purpose: it is policy, not content, and the CLI reads
+    // it from the profile before it has any session key. The CLI's own
+    // --managed / --private and the machine's override both beat it.
+    app.put('/v1/account/new-sessions-managed', {
+        preHandler: [app.authenticate, app.requireOwner],
+        schema: {
+            body: z.object({ managed: z.boolean() })
+        }
+    }, async (request, reply) => {
+        const { managed } = request.body;
+        await db.account.update({
+            where: { id: request.userId },
+            data: { newSessionsManaged: managed }
+        });
+        log({ module: 'account', userId: request.userId, managed }, `New sessions default set to ${managed ? 'managed' : 'private'}`);
+        return reply.send({ newSessionsManaged: managed });
     });
 
     // Register the account's content (box) public key, so an owner can wrap

@@ -834,6 +834,11 @@ ${chalk.bold('To clean up runaway processes:')} Use ${chalk.cyan('drover doctor 
       } else if (arg === '--yolo') {
         // Shortcut for --dangerously-skip-permissions
         unknownArgs.push('--dangerously-skip-permissions')
+      } else if (arg === '--managed') {
+        // The session's kind (DROVE-388): the relay holds its key too.
+        options.managed = true
+      } else if (arg === '--private') {
+        options.managed = false
       } else if (arg === '--model') {
         options.model = args[++i]
       } else if (arg === '--permission-mode') {
@@ -997,6 +1002,8 @@ ${chalk.bold('Examples:')}
   drover --chrome           Enable Chrome browser access for this session
   drover --no-chrome        Disable Chrome even if default is on
   drover --no-sandbox       Disable Drover sandbox for this session
+  drover --managed          Let the relay hold this session's key, so it can share it
+  drover --private          Keep this session's key off the relay (the default)
   drover --js-runtime bun   Use bun instead of node to spawn Claude Code
   drover --claude-env ANTHROPIC_BASE_URL=http://127.0.0.1:3456
                            Use a custom API endpoint (e.g., claude-code-router)

@@ -68,6 +68,12 @@ export interface StartOptions {
     claudeArgs?: string[]
     startedBy?: 'daemon' | 'terminal'
     noSandbox?: boolean
+    /**
+     * The session's kind (DROVE-388): true, the relay holds the key too and
+     * can share the session; false, private; unset, the machine's override
+     * then the account's default decide.
+     */
+    managed?: boolean
     /** JavaScript runtime to use for spawning Claude Code (default: 'node') */
     jsRuntime?: JsRuntime
     /**
@@ -361,7 +367,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
             agentStateVersion: reattached.agentStateVersion,
         };
     } else {
-        response = await api.getOrCreateSession({ tag: sessionTag, metadata, state });
+        response = await api.getOrCreateSession({ tag: sessionTag, metadata, state, managed: options.managed });
     }
 
     // Handle server unreachable case - run Claude locally with hot reconnection
@@ -372,7 +378,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         const reconnection = startOfflineReconnection({
             serverUrl: configuration.serverUrl,
             onReconnected: async () => {
-                const resp = await api.getOrCreateSession({ tag: randomUUID(), metadata, state });
+                const resp = await api.getOrCreateSession({ tag: randomUUID(), metadata, state, managed: options.managed });
                 if (!resp) throw new Error('Server unavailable');
                 const session = api.sessionSyncClient(resp);
                 let latestClaudeGoalStatus: AgentGoalStatus | null = null;

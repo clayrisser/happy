@@ -250,20 +250,32 @@ switch (cmd) {
     // The CLI's own ApiClient. `dataKey` is what a QR-paired CLI does: mint a
     // session key, wrap it to the account's box public key. `legacy` is the
     // pre-dataKey CLI: everything under the master secret, no session key.
-    const [who, variant, name] = args;
+    // The fourth word is the kind (DROVE-388, decision 0c): `managed` or
+    // `private` is the CLI's --managed / --private; nothing is the default
+    // resolution (this machine's settings.json, then the account's profile).
+    // An explicit `managed` on a relay that cannot manage is the one-line
+    // failure the CLI gives, printed and exit 1.
+    const [who, variant, name, kind] = args;
     const { ApiClient } = await import(`${cli}/api/api.ts`);
     const account = readState(who);
     const credential = variant === "legacy"
       ? { token: account.token, encryption: { type: "legacy", secret: unb64(account.secret) } }
       : { token: account.token, encryption: { type: "dataKey", publicKey: unb64(account.boxPublicKey), machineKey: enc.getRandomBytes(32) } };
     const client = await ApiClient.create(credential);
-    const session = await client.getOrCreateSession({
-      // Session.tag is kept in the clear by the server; an opaque id, as the
-      // CLI uses.
-      tag: `shared-sessions-${name}-${randomUUID()}`,
-      metadata: { path: `/tmp/shared-sessions/${name}`, host: "shared-sessions-test", name: `shared ${name}`, version: configuration.currentCliVersion },
-      state: null,
-    });
+    let session;
+    try {
+      session = await client.getOrCreateSession({
+        // Session.tag is kept in the clear by the server; an opaque id, as the
+        // CLI uses.
+        tag: `shared-sessions-${name}-${randomUUID()}`,
+        metadata: { path: `/tmp/shared-sessions/${name}`, host: "shared-sessions-test", name: `shared ${name}`, version: configuration.currentCliVersion },
+        state: null,
+        managed: kind === "managed" ? true : kind === "private" ? false : undefined,
+      });
+    } catch (error) {
+      console.error(`shared-sessions: ${error.message}`);
+      process.exit(1);
+    }
     if (!session) throw new Error("getOrCreateSession returned null");
     writeState(`session-${name}`, {
       id: session.id,
@@ -325,7 +337,7 @@ switch (cmd) {
     out({
       status: res.status,
       sessions: res.status === 200
-        ? res.body.sessions.map((s) => ({ id: s.id, role: s.role, ownerId: s.ownerId, dataEncryptionKey: s.dataEncryptionKey }))
+        ? res.body.sessions.map((s) => ({ id: s.id, role: s.role, ownerId: s.ownerId, dataEncryptionKey: s.dataEncryptionKey, managed: s.managed, wasManagedAt: s.wasManagedAt }))
         : res.body,
     });
     break;
@@ -398,6 +410,115 @@ switch (cmd) {
     const cliReceived = res.status === 200 ? await heard : false;
     cliSocket.close();
     out({ status: res.status, body: res.body, cliReceived });
+    break;
+  }
+  case "relay": {
+    // GET /v1/relay is public: no account, no token. When the test holds the
+    // relay's escrow seed (SHARED_SESSIONS_ESCROW_SEED), the announced public
+    // key is checked against the key that seed derives.
+    const res = await fetch(`${serverUrl}/v1/relay`);
+    const body = await res.json();
+    const seed = process.env.SHARED_SESSIONS_ESCROW_SEED;
+    let escrowMatchesSeed = null;
+    if (seed) {
+      const expected = nacl.box.keyPair.fromSecretKey(Buffer.from(seed, "hex")).publicKey;
+      escrowMatchesSeed = body.escrowPublicKey ? hex(unb64(body.escrowPublicKey)) === hex(expected) : false;
+    }
+    out({ status: res.status, body, escrowMatchesSeed });
+    break;
+  }
+  case "escrow-open": {
+    // The relay's side of a managed session, done by the test with the seed
+    // it gave the relay: open the stored escrow wrap and compare it with the
+    // key the CLI minted. Proves the CLI wrapped the RIGHT key to the RIGHT key.
+    const [escrowKeyB64, name] = args;
+    const seed = process.env.SHARED_SESSIONS_ESCROW_SEED;
+    if (!seed) throw new Error("SHARED_SESSIONS_ESCROW_SEED is required");
+    const session = readState(`session-${name}`);
+    const opened = unwrap(escrowKeyB64, new Uint8Array(Buffer.from(seed, "hex")));
+    out({ name, matchesMinted: hex(opened) === hex(unb64(session.encryptionKey)) });
+    break;
+  }
+  case "create-session-raw": {
+    // An older CLI, or a private session by hand: a dataKey session posted
+    // WITHOUT an escrow wrap. Same request the CLI makes, minus the field,
+    // so the Managed switch has something to turn on.
+    const [who, name] = args;
+    const account = readState(who);
+    const key = enc.getRandomBytes(32);
+    const res = await http(who, "POST", "/v1/sessions", {
+      tag: `shared-sessions-${name}-${randomUUID()}`,
+      metadata: b64(enc.encrypt(key, "dataKey", { path: `/tmp/shared-sessions/${name}`, host: "shared-sessions-test", name: `shared ${name}`, version: configuration.currentCliVersion })),
+      agentState: null,
+      dataEncryptionKey: b64(wrap(key, unb64(account.boxPublicKey))),
+    });
+    if (res.status !== 200) throw new Error(`create-session-raw: ${res.status} ${JSON.stringify(res.body)}`);
+    writeState(`session-${name}`, { id: res.body.session.id, encryptionKey: b64(key), encryptionVariant: "dataKey" });
+    out({ name, id: res.body.session.id });
+    break;
+  }
+  case "escrow-on": {
+    // The Managed switch, ON, as the owner's app does it: open its own
+    // session key, wrap it to the relay's announced escrow public key, put
+    // it. On a relay that announces none, put a well-formed wrap to a
+    // throwaway key so the relay's own refusal is what gets measured.
+    const [who, name] = args;
+    const session = readState(`session-${name}`);
+    const relay = await (await fetch(`${serverUrl}/v1/relay`)).json();
+    const dataKey = await sessionKeyFor(who, session.id);
+    const target = relay.escrowPublicKey ? unb64(relay.escrowPublicKey) : nacl.box.keyPair().publicKey;
+    const escrowKey = b64(wrap(dataKey, target));
+    out(await http(who, "PUT", `/v1/sessions/${session.id}/escrow`, { escrowKey }));
+    break;
+  }
+  case "escrow-off": {
+    // The Managed switch, OFF: the relay forgets its wrap, drops the grants
+    // that had no key of their own, and remembers it held the key.
+    const [who, name] = args;
+    const session = readState(`session-${name}`);
+    out(await http(who, "DELETE", `/v1/sessions/${session.id}/escrow`));
+    break;
+  }
+  case "set-managed-default": {
+    // The account's "new sessions managed" setting, as the app's account
+    // settings write it.
+    const [who, word] = args;
+    out(await http(who, "PUT", "/v1/account/new-sessions-managed", { managed: word === "on" }));
+    break;
+  }
+  case "machine-default": {
+    // This machine's override, written the way the CLI's own settings
+    // module writes it (the test's throwaway happy home, never ~/.happy).
+    const [word] = args;
+    const { updateSettings } = await import(`${cli}/persistence.ts`);
+    await updateSettings((current) => {
+      const next = { ...current };
+      if (word === "unset") delete next.managedSessions;
+      else next.managedSessions = word === "on";
+      return next;
+    });
+    out({ managedSessions: word === "unset" ? null : word === "on" });
+    break;
+  }
+  case "grant-managed": {
+    // A grant on a managed session: principal and right, no key. The relay
+    // makes the grantee's wrap itself.
+    const [owner, name, guest, role] = args;
+    const session = readState(`session-${name}`);
+    const grantee = readState(guest);
+    out(await http(owner, "POST", `/v1/sessions/${session.id}/grants`, { granteeAccountId: grantee.accountId, role }));
+    break;
+  }
+  case "set-kind": {
+    // The "may add machines" switch: PUT /v1/accounts/:id/kind as `who`.
+    const [who, target, kind] = args;
+    const account = readState(target);
+    out(await http(who, "PUT", `/v1/accounts/${account.accountId}/kind`, { kind }));
+    break;
+  }
+  case "accounts": {
+    const [who] = args;
+    out(await http(who, "GET", "/v1/accounts"));
     break;
   }
   default:

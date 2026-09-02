@@ -5,17 +5,25 @@ import { log } from "@/utils/log";
 import { randomKeyNaked } from "@/utils/randomKeyNaked";
 import { allocateUserSeq } from "@/storage/seq";
 import { buildDeleteSessionUpdate, buildNewSessionUpdate, eventRouter, sessionGrantRoom } from "@/app/events/eventRouter";
-import { isWrappedKeyShaped } from "@/app/session/sessionAccess";
+import { grantsHonoured, isWrappedKeyShaped } from "@/app/session/sessionAccess";
+import { canManage, wrapEscrowedKeyFor } from "@/app/relay/relayConfig";
 
 /**
  * Grants: one session handed to one other account (DROVE-388).
  *
- * The owner's app does the cryptography. It unwraps the session's own
- * dataEncryptionKey with its box private key, re-wraps the data key to the
- * grantee's content public key with the same layout, and posts the bytes
- * here. The server checks the shape, stores them, and from then on hands the
- * grantee those bytes in place of dataEncryptionKey on every session row.
- * It never sees a plaintext session key.
+ * PRIVATE session (no escrow wrap): the owner's app does the cryptography.
+ * It unwraps the session's own dataEncryptionKey with its box private key,
+ * re-wraps the data key to the grantee's content public key with the same
+ * layout, and posts the bytes here. The server checks the shape, stores
+ * them, and from then on hands the grantee those bytes in place of
+ * dataEncryptionKey on every session row. It never sees a plaintext session
+ * key. Only while RELAY_SHARING is on (decision 0c): off, every grant route
+ * on a private session answers 403 sharing-off.
+ *
+ * MANAGED session (Session.escrowKey set): the grant carries no key. The
+ * relay opens the escrow wrap with its own key and wraps for the grantee
+ * itself on every read (sessionAccess.ts). A wrapped key posted anyway is
+ * ignored. Shares whatever RELAY_SHARING says.
  *
  * Owner only, on every route. A guest cannot grant, list or revoke, and a
  * session the caller does not own is not found.
@@ -52,7 +60,7 @@ export function sessionGrantRoutes(app: Fastify) {
             body: z.object({
                 granteeAccountId: z.string().optional(),
                 granteeContentPublicKey: z.string().optional(),
-                wrappedKey: z.string(),
+                wrappedKey: z.string().optional(),
                 role: roleSchema
             }).refine(
                 (b) => (b.granteeAccountId ? 1 : 0) + (b.granteeContentPublicKey ? 1 : 0) === 1,
@@ -76,9 +84,27 @@ export function sessionGrantRoutes(app: Fastify) {
             return reply.code(409).send({ error: 'session-not-shareable' });
         }
 
-        const wrapped = new Uint8Array(Buffer.from(wrappedKey, 'base64'));
-        if (!isWrappedKeyShaped(wrapped)) {
-            return reply.code(400).send({ error: 'wrapped-key-malformed' });
+        // A private session shares only while the relay's operator said so.
+        if (!grantsHonoured(session)) {
+            return reply.code(403).send({ error: 'sharing-off' });
+        }
+
+        let wrapped: Uint8Array<ArrayBuffer> | null = null;
+        if (session.escrowKey) {
+            // Managed: the relay wraps for the grantee itself, so the grant
+            // carries no key. It needs its own key to do that; a relay that
+            // lost it cannot honour the escrow wrap it holds.
+            if (!canManage()) {
+                return reply.code(409).send({ error: 'relay-cannot-manage' });
+            }
+        } else {
+            if (!wrappedKey) {
+                return reply.code(400).send({ error: 'wrapped-key-required' });
+            }
+            wrapped = new Uint8Array(Buffer.from(wrappedKey, 'base64'));
+            if (!isWrappedKeyShaped(wrapped)) {
+                return reply.code(400).send({ error: 'wrapped-key-malformed' });
+            }
         }
 
         let granteeWhere: { id: string } | { contentPublicKey: string };
@@ -93,7 +119,7 @@ export function sessionGrantRoutes(app: Fastify) {
         }
         const grantee = await db.account.findUnique({
             where: granteeWhere,
-            select: { id: true }
+            select: { id: true, contentPublicKey: true }
         });
         if (!grantee) {
             return reply.code(404).send({ error: 'grantee-not-found' });
@@ -111,11 +137,14 @@ export function sessionGrantRoutes(app: Fastify) {
 
         // The grantee's phone learns the session now, with the key IT can
         // open, and its live sockets start hearing the session's updates.
+        // On a managed session that key is the relay's own re-wrap, made here
+        // for the update and again on every read.
+        const granteeKey = wrapped ?? wrapEscrowedKeyFor(session.escrowKey, grantee.contentPublicKey);
         eventRouter.joinUserScoped(grantee.id, sessionGrantRoom(sessionId));
         const updSeq = await allocateUserSeq(grantee.id);
         eventRouter.emitUpdate({
             userId: grantee.id,
-            payload: buildNewSessionUpdate({ ...session, dataEncryptionKey: wrapped }, updSeq, randomKeyNaked(12)),
+            payload: buildNewSessionUpdate({ ...session, dataEncryptionKey: granteeKey }, updSeq, randomKeyNaked(12)),
             recipientFilter: { type: 'user-scoped-only' }
         });
 
@@ -133,10 +162,13 @@ export function sessionGrantRoutes(app: Fastify) {
 
         const session = await db.session.findFirst({
             where: { id: sessionId, accountId: userId },
-            select: { id: true }
+            select: { id: true, escrowKey: true }
         });
         if (!session) {
             return reply.code(404).send({ error: 'Session not found' });
+        }
+        if (!grantsHonoured(session)) {
+            return reply.code(403).send({ error: 'sharing-off' });
         }
 
         const grants = await db.sessionGrant.findMany({
@@ -159,6 +191,17 @@ export function sessionGrantRoutes(app: Fastify) {
     }, async (request, reply) => {
         const userId = request.userId;
         const { sessionId, granteeAccountId } = request.params;
+
+        const session = await db.session.findFirst({
+            where: { id: sessionId, accountId: userId },
+            select: { id: true, escrowKey: true }
+        });
+        if (!session) {
+            return reply.code(404).send({ error: 'Session not found' });
+        }
+        if (!grantsHonoured(session)) {
+            return reply.code(403).send({ error: 'sharing-off' });
+        }
 
         // Ownership is part of the delete's own where clause, so a session
         // the caller does not own and a grant that does not exist read the
