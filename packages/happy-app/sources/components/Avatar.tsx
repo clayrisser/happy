@@ -8,6 +8,7 @@ import { useSetting } from '@/sync/storage';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { resolveAvatarHarness, type AvatarHarnessIcon } from '@/utils/avatarHarness';
 import { normalizeAvatarStyle } from '@/utils/avatarStyle';
+import { HarnessGlyph } from './HarnessGlyph';
 
 export type AvatarBadgeLocation = 'sessionHeader' | 'sessionList' | 'none';
 
@@ -25,25 +26,18 @@ interface AvatarProps {
     thumbhash?: string | null;
 }
 
-const harnessIcons: Record<AvatarHarnessIcon, number> = {
-    claude: require('@/assets/images/icon-claude.png'),
-    codex: require('@/assets/images/icon-gpt.png'),
-    agy: require('@/assets/images/icon-agy.png'),
-    pi: require('@/assets/images/icon-pi.png'),
-    gemini: require('@/assets/images/icon-gemini.png'),
-    rig: require('@/assets/images/logo-drover.png'),
-};
-
 // One badge geometry for every place an avatar carries a harness icon. The
 // glyph ratios keep clear air between glyph and circle edge. `iconSize` is the
 // box width; `contain` derives the height. The Cattle Drover longhorn is
 // 1.56:1, so unlike the square mark it replaced its widest points are the horn
 // tips on the horizontal, not box corners on the diagonal. 0.34 puts them at
 // 82% of the 0.42 circle's radius, where a square mark at 0.34 would have hit
-// the rim.
+// the rim. The marks themselves come from HarnessGlyph.tsx (DROVE-393); this
+// file only sizes them. Cursor's cube is line art drawn to the edge of its
+// box, like the Codex mark, so it takes the same 0.3.
 function harnessBadgeSizes(size: number, harness: AvatarHarnessIcon) {
     const circleSize = Math.round(size * 0.42);
-    const iconSize = harness === 'codex'
+    const iconSize = harness === 'codex' || harness === 'cursor'
         ? Math.round(size * 0.3)
         : harness === 'claude' || harness === 'rig'
             ? Math.round(size * 0.34)
@@ -107,7 +101,6 @@ export const Avatar = React.memo((props: AvatarProps) => {
 
         // Add harness icon overlay if enabled
         if (showHarnessIcon && effectiveHarness) {
-            const harnessIcon = harnessIcons[effectiveHarness];
             const { circleSize, iconSize } = harnessBadgeSizes(size, effectiveHarness);
 
             return (
@@ -119,12 +112,7 @@ export const Avatar = React.memo((props: AvatarProps) => {
                         alignItems: 'center',
                         justifyContent: 'center'
                     }]}>
-                        <Image
-                            source={harnessIcon}
-                            style={{ width: iconSize, height: iconSize }}
-                            contentFit="contain"
-                            tintColor={effectiveHarness === 'codex' || effectiveHarness === 'rig' ? theme.colors.text : undefined}
-                        />
+                        <HarnessGlyph harness={effectiveHarness} size={iconSize} color={theme.colors.text} />
                     </View>
                 </View>
             );
@@ -144,15 +132,13 @@ export const Avatar = React.memo((props: AvatarProps) => {
         AvatarComponent = AvatarGradient;
     }
 
-    // Determine harness icon for generated avatars
-    const harnessIcon = effectiveHarness ? harnessIcons[effectiveHarness] : null;
     const { circleSize, iconSize } = effectiveHarness
         ? harnessBadgeSizes(size, effectiveHarness)
         : { circleSize: 0, iconSize: 0 };
 
     // Only wrap in a container when this caller explicitly opts into a badge
     // location and the session has an identifiable harness.
-    if (showHarnessIcon && effectiveHarness && harnessIcon) {
+    if (showHarnessIcon && effectiveHarness) {
         return (
             <View style={[styles.container, { width: size, height: size }]}>
                 <AvatarComponent {...avatarProps} size={size} />
@@ -162,12 +148,7 @@ export const Avatar = React.memo((props: AvatarProps) => {
                     alignItems: 'center',
                     justifyContent: 'center'
                 }]}>
-                    <Image
-                        source={harnessIcon}
-                        style={{ width: iconSize, height: iconSize }}
-                        contentFit="contain"
-                        tintColor={effectiveHarness === 'codex' || effectiveHarness === 'rig' ? theme.colors.text : undefined}
-                    />
+                    <HarnessGlyph harness={effectiveHarness} size={iconSize} color={theme.colors.text} />
                 </View>
             </View>
         );

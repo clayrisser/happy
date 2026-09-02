@@ -1,11 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
-import { HARNESS_NAMES, isRetiredHarness, listAvailableHarnesses } from './harnessCatalog';
+import { HARNESS_NAMES, NON_SPAWNABLE_HARNESS_NAMES, getHarnessName, isRetiredHarness, listAvailableHarnesses } from './harnessCatalog';
 
 describe('harness catalog', () => {
     it('names Happy and Antigravity by product, not by CLI id', () => {
         expect(HARNESS_NAMES.rig).toBe('Cattle Drover');
         expect(HARNESS_NAMES.agy).toBe('Antigravity');
+    });
+
+    // DROVE-393. A session can carry a flavor the picker cannot start; it is
+    // named here so the info screen and the row glyph's label say OpenCode
+    // rather than the slug, and avatarHarness.ts draws a mark for every key.
+    it('names opencode without offering to start it', () => {
+        expect(getHarnessName('opencode')).toBe('OpenCode');
+        expect(Object.keys(NON_SPAWNABLE_HARNESS_NAMES)).toEqual(['opencode']);
+        expect(Object.keys(HARNESS_NAMES)).not.toContain('opencode');
     });
 
     it('retires OpenClaw only', () => {

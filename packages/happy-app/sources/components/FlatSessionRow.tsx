@@ -7,6 +7,7 @@ import { Text } from '@/components/StyledText';
 import { Typography } from '@/constants/Typography';
 import { Avatar } from './Avatar';
 import { StatusDot } from './StatusDot';
+import { SessionRowTrailing } from './SessionRowTrailing';
 import { SessionActionsAnchor, SessionActionsPopover } from './SessionActionsPopover';
 import { SessionShortcutHintBadge } from './ShortcutHints';
 import { useNavigateToSession } from '@/hooks/useNavigateToSession';
@@ -252,9 +253,28 @@ export const FlatSessionRow = React.memo(({ row, selected, showBorder, archived 
                     </View>
                 </View>
 
-                <Text style={styles.project} numberOfLines={1}>
-                    {projectName}
-                </Text>
+                {/*
+                  * The little status (DROVE-393), at the row's trailing edge
+                  * under the timestamp: the harness glyph, then the same dot
+                  * the card row draws, from the same facts. On this line
+                  * rather than the title's because the title line already
+                  * carries the shortcut hint, the bolt, the reading mark and
+                  * the time, and a title is the one thing on the row that
+                  * should not lose width to a mark. The flat row's draft
+                  * pencil lives below with the git counts, so the slot here
+                  * never swaps to it. Retired work draws the glyph alone.
+                  */}
+                <View style={styles.projectRow}>
+                    <Text style={styles.project} numberOfLines={1}>
+                        {projectName}
+                    </Text>
+                    <SessionRowTrailing
+                        flavor={session.flavor}
+                        clientId={session.clientId}
+                        dot={archived ? null : session.dot}
+                        hasDraft={false}
+                    />
+                </View>
 
                 <View style={styles.workspaceRow}>
                     <View style={styles.workspaceLocation}>
@@ -418,7 +438,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         textAlign: 'right',
         ...Typography.default('regular'),
     },
+    projectRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
     project: {
+        flex: 1,
+        minWidth: 0,
         fontSize: 15,
         lineHeight: 20,
         color: theme.colors.textSecondary,
