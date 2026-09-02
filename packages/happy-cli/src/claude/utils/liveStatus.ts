@@ -56,12 +56,20 @@
  * assistant `text` block and the `tool_use` that follows it were measured 4.1s
  * apart in Clay's session, so a stricter test flickers the strip off and on
  * mid-turn.
+ *
+ * AND SINCE DROVE-344, Claude Code's own status out of its session registry,
+ * which is the term that actually holds through a long model call. The fd 3
+ * flag above never fires on a native-installer Claude — it is spawned as a
+ * binary and cannot inherit a patched `fetch` — so on Clay's machine the
+ * paragraph above described a signal that had been dead for every session he
+ * has ever watched. See turnStatus.ts for the measurement.
  */
 
 import { closeSync, fstatSync, openSync, readSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { basename, join } from 'node:path'
 
 import type { CompactionLatch, CompactionState } from './compaction'
+import type { TurnStatus } from './turnStatus'
 
 /** The tool the assistant is waiting on: one `tool_use` with no `tool_result`. */
 export interface LiveStatusTool {
@@ -781,6 +789,16 @@ export function createLiveStatusReader(opts: {
     /** The process's own "an API call is in flight" flag; see the file header. */
     isThinking?: () => boolean
     /**
+     * Claude Code's own word for whether it is inside a turn (DROVE-344).
+     *
+     * The term that makes the other four honest, and on a native-installer
+     * Claude the only one that fires during a long model call. `isThinking`
+     * above is fd 3, and fd 3 is dead on a spawned binary — see turnStatus.ts
+     * for the measurement. Null is UNKNOWN and never counts as working, so an
+     * older Claude with no registry behaves exactly as it did before.
+     */
+    turnStatus?: () => TurnStatus | null
+    /**
      * The compaction pass, opened by the `PreCompact` hook (DROVE-257).
      *
      * Read here and CLOSED here: the `compact_boundary` record is written into
@@ -1359,14 +1377,38 @@ export function createLiveStatusReader(opts: {
             // moved since before the pass began — so without this term the
             // most disruptive thing a session does is the one thing that looks
             // idle from outside.
-            const mainWorking = !!tool || thinking || !quiet || !!compacting
+            //
+            // AND CLAUDE CODE'S OWN WORD FOR IT, which is DROVE-344 and which
+            // is the only term left standing during a long model call. The
+            // other four are all false there: no tool is open, the transcript
+            // has not moved since the last result because nothing is written
+            // while the model composes, nothing is compacting, and `thinking`
+            // is fd 3 — dead on a native-installer Claude, which is spawned as
+            // a binary and never inherits the launcher's patched `fetch`. That
+            // is the whole of the green dot Clay photographed at 2m 14s into a
+            // turn. Null is unknown and stays false; see turnStatus.ts.
+            const turn = opts.turnStatus?.() ?? null
+            const inTurn = turn?.active === true
+            const mainWorking = !!tool || thinking || !quiet || !!compacting || inTurn
             const moving = mainWorking || agentRows.length > 0 || workflows.length > 0
             if (!moving) {
                 return null
             }
+            // WHERE THE CLOCK COMES FROM, best source first.
+            //
+            // The registry's `since` is LAST, not because it is worse but
+            // because it is coarser: it is when Claude Code entered this
+            // status, which a `shell` transition mid-turn resets. The
+            // transcript's own turn start is the true one wherever it exists.
+            // It sits ahead of nothing at all, though, and that is the case it
+            // is here for: a session resumed mid-turn has its opening prompt
+            // behind the tailer's starting offset, so `turnStartedAt` and
+            // `lastRecordAt` are both 0 and the snapshot would have had to omit
+            // `main` — which the app reads as idle, drawing the very green dot
+            // this term exists to remove.
             const mainStartedAt = turnStartedAt > 0
                 ? turnStartedAt
-                : (tool?.startedAt ?? lastRecordAt)
+                : (tool?.startedAt ?? (lastRecordAt || (inTurn ? turn!.since : 0)))
 
             // The tally, published whether or not the MAIN thread is the thing
             // working (DROVE-184). A fan-out that outlives its turn leaves

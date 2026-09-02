@@ -83,32 +83,39 @@ async function paneRunningClaude(pane: string): Promise<string | null> {
  * session (2026-08-30, claude 2.1.250): pid, sessionId, cwd, tmux,
  * messagingSocketPath, status — plus fields this gate does not care about.
  */
-interface ClaudeSessionRecord {
+export interface ClaudeSessionRecord {
     pid?: number
     sessionId?: string
     cwd?: string
     tmux?: string
     messagingSocketPath?: string
     status?: string
+    /**
+     * Epoch ms the `status` above last CHANGED, not when the file was last
+     * touched (DROVE-344).
+     *
+     * Claude Code rewrites the record on a transition and leaves it alone in
+     * between, so on a session that has been mid-turn for thirteen minutes
+     * this reads the turn's own start time. That makes it the honest clock for
+     * "working since", which is the one number the live status could not
+     * otherwise supply while nothing is being written to the transcript.
+     */
+    statusUpdatedAt?: number
 }
 
 /**
- * What Claude Code says it is doing right now, straight from its own registry.
+ * The registry record for this session, or null when there is not one.
  *
- * Null when there is no record for this session: a config dir with no
- * `sessions/` (an older Claude, or the dir was never written), a session id we
- * were never told, or a record that has aged out. Null is NOT idle — the gate
- * treats "I could not tell" the same as "busy".
- *
- * `pane` only breaks a tie: if two records claim the same session id (a resume
- * that outlived its parent), the one whose `tmux` handle ends in this pane is
- * the one on screen.
+ * Split out of `registryStatus` for DROVE-344, which needs `statusUpdatedAt`
+ * as well as the status word. Same matching rule, in one place: a record whose
+ * `sessionId` is ours, and where two claim the same id (a resume that outlived
+ * its parent) the one whose `tmux` handle ends in this pane.
  */
-export async function registryStatus(
+export async function registryRecord(
     configDir: string | null | undefined,
     claudeSessionId: string | null | undefined,
     pane: string,
-): Promise<string | null> {
+): Promise<ClaudeSessionRecord | null> {
     if (!claudeSessionId) return null
     const root = configDir && configDir.trim().length > 0 ? configDir : ambientDataDir()
     const dir = join(root, 'sessions')
@@ -131,7 +138,27 @@ export async function registryStatus(
     }
     if (matches.length === 0) return null
     const onThisPane = matches.find((r) => typeof r.tmux === 'string' && r.tmux.endsWith(pane))
-    return (onThisPane ?? matches[0]).status ?? null
+    return onThisPane ?? matches[0]
+}
+
+/**
+ * What Claude Code says it is doing right now, straight from its own registry.
+ *
+ * Null when there is no record for this session: a config dir with no
+ * `sessions/` (an older Claude, or the dir was never written), a session id we
+ * were never told, or a record that has aged out. Null is NOT idle — the gate
+ * treats "I could not tell" the same as "busy".
+ *
+ * `pane` only breaks a tie: if two records claim the same session id (a resume
+ * that outlived its parent), the one whose `tmux` handle ends in this pane is
+ * the one on screen.
+ */
+export async function registryStatus(
+    configDir: string | null | undefined,
+    claudeSessionId: string | null | undefined,
+    pane: string,
+): Promise<string | null> {
+    return (await registryRecord(configDir, claudeSessionId, pane))?.status ?? null
 }
 
 /** One prompt as `GET /v1/events?state=pending` lists it. */

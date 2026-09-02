@@ -137,10 +137,30 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
     // all, which is exactly the "Sketching… 17m 13s" the app used to render as
     // the word "online" (DROVE-54). Wrapped rather than replaced, because the
     // session's own keep-alive is the other consumer.
-    let thinking = false;
-    const onThinkingChange = (next: boolean) => {
-        thinking = next;
+    //
+    // AND IT NEVER FIRES ANY MORE (DROVE-344). `claude_local_launcher.cjs`
+    // patches `global.fetch` and then SPAWNS the native-installer binary as a
+    // child process, which cannot inherit a patched global. Measured on Clay's
+    // own log: thirteen minutes of continuous work, debug logging demonstrably
+    // on, and not one `Thinking state changed` line. So a second term stands
+    // beside it — Claude Code's own registry status, which the scanner polls —
+    // and the two are merged rather than swapped, because the `.js` install
+    // path and an older Claude with no registry each still have exactly one of
+    // them.
+    let fetchThinking = false;
+    let turnActive = false;
+    /** Either signal saying so. What `session.thinking` and the gates read. */
+    const isThinking = () => fetchThinking || turnActive;
+    let reportedThinking = false;
+    const pushThinking = () => {
+        const next = isThinking();
+        if (next === reportedThinking) return;
+        reportedThinking = next;
         session.onThinkingChange(next);
+    };
+    const onThinkingChange = (next: boolean) => {
+        fetchThinking = next;
+        pushThinking();
     };
 
     // DROVE-247: the terminal's dot. Created here rather than inside the
@@ -235,12 +255,23 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         // green dot. Not gated on TMUX_PANE — a paneless local run is still a
         // real Claude writing the same files, and the app is still the only
         // place Clay can watch it from.
-        isThinking: () => thinking,
+        isThinking: () => isThinking(),
         // DROVE-257: and whether a COMPACTION is running, which no amount of
         // reading the disk can tell you while it happens. The latch is opened
         // by the `PreCompact` hook (runClaude wires the hook server to it) and
         // closed by the `compact_boundary` record this same reader tails.
         compaction: compactionLatch,
+        // DROVE-344: Claude Code's own "am I inside a turn", read by the
+        // scanner because the scanner is what knows the session id and the
+        // config dir a flip may have moved. It lands on `session.thinking`
+        // through the same merge fd 3 feeds, so the app's OTHER working signal
+        // — the `activity` ephemeral, which is what a session row falls back on
+        // when no snapshot has arrived yet — stops reading false for every
+        // session on a native-installer Claude.
+        onTurnStatusChange: (turn) => {
+            turnActive = turn?.active === true
+            pushThinking()
+        },
         onLiveStatus: (liveStatus) => {
             session.client.updateMetadata((metadata) => ({
                 ...metadata,
@@ -249,11 +280,15 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
             // DROVE-247: and the same facts to the drover bus, so the TERMINAL
             // can draw the dot the phone has drawn since DROVE-231. The three
             // terms are the strip's own (`AgentInputStatusRow`): the snapshot's
-            // `main`, the fd 3 thinking counter for the seconds before a
-            // snapshot exists, and a compaction — which is the main thread
-            // working and the one state nothing else reports. Publishes only
-            // when the state moves; see dotPublish.ts.
-            const mainWorking = !!liveStatus?.main || thinking || !!liveStatus?.compacting
+            // `main`, the thinking flag for the seconds before a snapshot
+            // exists, and a compaction — which is the main thread working and
+            // the one state nothing else reports. Publishes only when the state
+            // moves; see dotPublish.ts.
+            //
+            // `isThinking()` rather than the bare fd 3 counter since DROVE-344,
+            // so the terminal's dot and the phone's are drawn off the same two
+            // signals instead of the terminal keeping the dead one.
+            const mainWorking = !!liveStatus?.main || isThinking() || !!liveStatus?.compacting
             dotPublisher.sync({
                 mainWorking,
                 toolRunning: !!liveStatus?.main && !!liveStatus.tool,
@@ -1634,7 +1669,7 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                 complete: () => distEntryIsComplete(distEntrypoint()),
             }),
             claudeSessionId: () => session.sessionId,
-            isBusy: () => thinking || inflight.count() > 0,
+            isBusy: () => isThinking() || inflight.count() > 0,
             /**
              * Claude Code's own word for it, not ours.
              *

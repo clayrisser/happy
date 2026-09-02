@@ -12,6 +12,7 @@ import { createSubagentTranscriptReader, type SubagentTranscriptRequest, type Su
 import { createWorkflowDetailReader } from "./workflowDetail";
 import type { WorkflowDetailRequest, WorkflowDetailResponse } from "@slopus/happy-wire";
 import { parseAgentNotifications, type AgentNotification } from "./agentNotification";
+import { createTurnStatusReader, type TurnStatus } from "./turnStatus";
 
 /**
  * Known internal Claude Code event types that should be silently skipped.
@@ -207,8 +208,25 @@ export async function createSessionScanner(opts: {
      * thinking — nothing is written while it composes — so without this the
      * turn timer stops during exactly the "Sketching… 17m 13s" state Clay
      * photographed.
+     *
+     * DEAD on a native-installer Claude, which is every current install: the
+     * launcher patches `fetch` and then SPAWNS a Mach-O binary that cannot
+     * inherit the patch, so fd 3 carries nothing (DROVE-344). Kept because the
+     * `.js` install path and the SDK path both still feed it, and because a
+     * term that is merely false costs nothing.
      */
     isThinking?: () => boolean
+    /**
+     * Whether Claude Code says it is inside a turn, and when the turn started
+     * (DROVE-344).
+     *
+     * Read here rather than taken from the caller, for the reason `onLiveStatus`
+     * gives above: this is the object that knows the session id and the config
+     * dir, and that follows a flip into another account's. Reported OUT through
+     * `onTurnStatusChange` so the launcher can put the same fact on
+     * `session.thinking`, instead of a second reader deriving it again.
+     */
+    onTurnStatusChange?: (turn: TurnStatus | null) => void
     /**
      * The compaction pass in flight, when the caller is tracking one
      * (DROVE-257). Opened by the `PreCompact` hook, closed by the
@@ -229,6 +247,12 @@ export async function createSessionScanner(opts: {
     // it. Snapshotting it here is what left the scanner reading the old
     // account's file forever after a flip, which muted the session in the app.
     let projectDir = getProjectPath(opts.workingDirectory, opts.claudeConfigDir);
+    // The config dir ITSELF, kept beside the project dir it derives (DROVE-344).
+    // `getProjectPath` folds it into a transcript path and there is no way back
+    // out, and Claude Code's session registry lives at `<configDir>/sessions/`,
+    // which is a different child of the same root. Moves with a flip for the
+    // same reason `projectDir` does.
+    let claudeConfigDir: string | null | undefined = opts.claudeConfigDir;
 
     // Finished, pending finishing and current session
     let finishedSessions = new Set<string>();
@@ -489,30 +513,66 @@ export async function createSessionScanner(opts: {
     // the remote launcher and runClaude's own scanners cost nothing.
     let liveStatusTimer: ReturnType<typeof setInterval> | null = null;
     let liveStatusPublisher: LiveStatusPublisher | null = null;
-    if (opts.onLiveStatus) {
+    // DROVE-344: Claude Code's own "am I inside a turn", polled on the same
+    // tick. Constructing it is free — it holds one cached value and reads
+    // nothing until polled — and the timer below starts for EITHER consumer,
+    // so a scanner that wants only the turn flag (or only the task tree) gets
+    // exactly one interval and a scanner that wants neither gets none.
+    const turnStatusReader = createTurnStatusReader({
+        configDir: () => claudeConfigDir,
+        sessionId: () => currentSessionId,
+        pane: () => process.env.TMUX_PANE ?? '',
+    });
+    let lastTurnPhase: string | null = null;
+    const reportTurnStatus = () => {
+        const turn = turnStatusReader.read();
+        // A level, not an event, and filtered on the way out for the same
+        // reason `onRunObserved` is: the registry restates the same word on
+        // every poll and each report is a socket write.
+        const phase = turn?.phase ?? null;
+        if (phase === lastTurnPhase) return;
+        lastTurnPhase = phase;
+        try {
+            opts.onTurnStatusChange?.(turn);
+        } catch (error) {
+            logger.debug('[SESSION_SCANNER] turn status consumer threw', error);
+        }
+    };
+    if (opts.onLiveStatus || opts.onTurnStatusChange) {
         const onLiveStatus = opts.onLiveStatus;
-        const reader = createLiveStatusReader({
-            projectDir,
-            sessionId: currentSessionId,
-            isThinking: opts.isThinking,
-            compaction: opts.compaction,
-        });
-        liveStatusPublisher = new LiveStatusPublisher((status) => {
-            try {
-                onLiveStatus(status);
-            } catch (error) {
-                logger.debug('[SESSION_SCANNER] live status consumer threw', error);
-            }
-        });
+        const reader = onLiveStatus
+            ? createLiveStatusReader({
+                projectDir,
+                sessionId: currentSessionId,
+                isThinking: opts.isThinking,
+                turnStatus: () => turnStatusReader.read(),
+                compaction: opts.compaction,
+            })
+            : null;
+        if (onLiveStatus) {
+            liveStatusPublisher = new LiveStatusPublisher((status) => {
+                try {
+                    onLiveStatus(status);
+                } catch (error) {
+                    logger.debug('[SESSION_SCANNER] live status consumer threw', error);
+                }
+            });
+        }
         liveStatusTimer = setInterval(() => {
             try {
                 // Re-stated every tick rather than pushed on change: both move
                 // for reasons this block does not observe (the hook names the
                 // session, a flip re-points the dir), and both are cheap
                 // no-ops when nothing moved.
-                reader.setProjectDir(projectDir);
-                reader.setSessionId(currentSessionId);
-                liveStatusPublisher?.sync(reader.read());
+                reader?.setProjectDir(projectDir);
+                reader?.setSessionId(currentSessionId);
+                // The registry read is async and the live status read is not,
+                // so this tick publishes the PREVIOUS tick's answer and starts
+                // the next one. One second behind a two-minute state is a
+                // rounding error, and it keeps `read()` synchronous — see
+                // turnStatus.ts.
+                if (reader) liveStatusPublisher?.sync(reader.read());
+                void turnStatusReader.poll().then(reportTurnStatus, () => { });
             } catch (error) {
                 logger.debug('[SESSION_SCANNER] live status read failed', error);
             }
@@ -586,8 +646,15 @@ export async function createSessionScanner(opts: {
          *     rewrites the tail of the transcript, so the same logical entry
          *     can sit at a different offset in the new file.
          */
-        setClaudeConfigDir: (claudeConfigDir: string | null | undefined) => {
-            const next = getProjectPath(opts.workingDirectory, claudeConfigDir);
+        setClaudeConfigDir: (nextConfigDir: string | null | undefined) => {
+            const next = getProjectPath(opts.workingDirectory, nextConfigDir);
+            // Set BEFORE the early return, and from the raw argument rather
+            // than the derived transcript path (DROVE-344). Claude Code's
+            // session registry is a sibling of the projects dir, not inside it,
+            // so a flip has to move this even in the degenerate case where the
+            // two accounts happen to hash to the same project path.
+            claudeConfigDir = nextConfigDir;
+            turnStatusReader.reset();
             if (next === projectDir) {
                 return;
             }

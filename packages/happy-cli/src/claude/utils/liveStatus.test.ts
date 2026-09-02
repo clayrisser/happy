@@ -477,6 +477,125 @@ describe('createLiveStatusReader', () => {
     })
 
     /**
+     * DROVE-344. The state Clay photographed the second time: a terminal
+     * reading `✳ Photosynthesizing… (2m 14s · ↓ 6.6k tokens)` and a phone
+     * drawing a flat green dot.
+     *
+     * The transcript below is that shape. The turn opened two and a bit minutes
+     * ago and NOTHING has been written since, because Claude Code writes an
+     * assistant record only when the message is complete and this one is still
+     * streaming. So every term the old derivation had is false: no tool is
+     * open, the transcript is far past its grace, nothing is compacting, and
+     * `isThinking` is fd 3 — which on the native-installer binary never fires
+     * at all (see turnStatus.ts).
+     *
+     * The registry is the term that is true, because Claude Code itself is what
+     * writes it.
+     */
+    describe('a turn in flight with nothing being written (DROVE-344)', () => {
+        const streaming = (now: number) => [
+            promptRecord(now - 134_000, 'do the thing'),
+            '',
+        ].join('\n')
+
+        const turn = (active: boolean, since: number) => () => ({
+            active,
+            phase: active ? 'busy' : 'idle',
+            since,
+        })
+
+        it('is idle with no registry to read, which is the bug', () => {
+            const now = Date.now()
+            writeFileSync(transcript, streaming(now))
+            expect(createLiveStatusReader({ projectDir, sessionId }).read(now)).toBeNull()
+        })
+
+        it('is working the moment the registry says the turn started', () => {
+            const now = Date.now()
+            writeFileSync(transcript, streaming(now))
+            const status = createLiveStatusReader({
+                projectDir,
+                sessionId,
+                turnStatus: turn(true, now - 134_000),
+            }).read(now)
+            expect(status).not.toBeNull()
+            expect(status!.main).toBeDefined()
+            // The transcript's own turn start still wins over the registry's,
+            // because it is the finer of the two.
+            expect(status!.main!.startedAt).toBe(now - 134_000)
+            expect(status!.turnStartedAt).toBe(now - 134_000)
+        })
+
+        it('holds through a two-minute tool call that writes nothing new', () => {
+            // The tool_use is on disk and its result is not, so the old
+            // derivation already covers this one — the point of the assertion
+            // is that adding the registry term does not disturb it, and that
+            // the running tool is still named.
+            const now = Date.now()
+            writeFileSync(transcript, [
+                promptRecord(now - 200_000, 'go'),
+                toolUseRecord(now - 120_000, 't1', 'Bash', { command: 'sleep 150', description: 'wait' }),
+                '',
+            ].join('\n'))
+            const status = createLiveStatusReader({
+                projectDir,
+                sessionId,
+                turnStatus: turn(true, now - 120_000),
+            }).read(now)
+            expect(status!.tool!.name).toBe('Bash')
+            expect(status!.main!.startedAt).toBe(now - 200_000)
+        })
+
+        it('goes quiet again when the registry says the turn ended', () => {
+            const now = Date.now()
+            writeFileSync(transcript, [
+                promptRecord(now - 134_000, 'do the thing'),
+                assistantTextRecord(now - 30_000, 'Done.'),
+                '',
+            ].join('\n'))
+            expect(createLiveStatusReader({
+                projectDir,
+                sessionId,
+                turnStatus: turn(false, now - 1_000),
+            }).read(now)).toBeNull()
+        })
+
+        it('never invents work: unknown leaves the four old terms to decide', () => {
+            const now = Date.now()
+            writeFileSync(transcript, streaming(now))
+            // An older Claude with no `sessions/` dir reads exactly as it did
+            // before this term existed, in both directions.
+            expect(createLiveStatusReader({
+                projectDir,
+                sessionId,
+                turnStatus: () => null,
+            }).read(now)).toBeNull()
+            expect(createLiveStatusReader({
+                projectDir,
+                sessionId,
+                turnStatus: () => null,
+                isThinking: () => true,
+            }).read(now)).not.toBeNull()
+        })
+
+        it('borrows the registry clock only when the transcript has none', () => {
+            // A session resumed mid-turn: the opening prompt is behind the
+            // tailer's starting offset, so `turnStartedAt` and `lastRecordAt`
+            // are both zero. Without a fallback `main` is omitted, and the app
+            // reads an absent `main` as idle — the very green dot this is here
+            // to remove.
+            const now = Date.now()
+            writeFileSync(transcript, '')
+            const status = createLiveStatusReader({
+                projectDir,
+                sessionId,
+                turnStatus: turn(true, now - 95_000),
+            }).read(now)
+            expect(status!.main!.startedAt).toBe(now - 95_000)
+        })
+    })
+
+    /**
      * DROVE-257. The state Clay photographed: a terminal reading `Compacting
      * conversation… (1m 55s, 2.3k tokens)` over `100% context used`, and a
      * phone drawing a flat green dot beside three workers.
