@@ -6,8 +6,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Text } from '@/components/StyledText';
 import { Typography } from '@/constants/Typography';
 import { Avatar } from './Avatar';
-import { StatusDot } from './StatusDot';
-import { SessionRowTrailing } from './SessionRowTrailing';
+import { SessionRowTrailing, type SessionRowTime } from './SessionRowTrailing';
 import { SessionActionsAnchor, SessionActionsPopover } from './SessionActionsPopover';
 import { SessionShortcutHintBadge } from './ShortcutHints';
 import { useNavigateToSession } from '@/hooks/useNavigateToSession';
@@ -33,8 +32,6 @@ import { readingRowMark, readingRowMarkLabel } from './readingRowMark';
 const AVATAR_SIZE = 60;
 const ROW_PADDING_LEFT = 16;
 const AVATAR_GAP = 12;
-const TOP_RIGHT_DOT_SIZE = 20;
-const TOP_RIGHT_SLOT_WIDTH = 56;
 const UNREAD_DOT_CLEAR_GRACE_MS = 350;
 
 /**
@@ -109,7 +106,7 @@ export const FlatSessionRow = React.memo(({ row, selected, showBorder, archived 
         hasUnread: showUnreadDot,
         faded,
     });
-    const topRightAccessibilityLabel = presentation.topRight.type === 'dot'
+    const timeAccessibilityLabel = presentation.time.type === 'accented'
         ? session.state === 'input_required'
             ? t('status.inputRequired')
             : session.state === 'permission_required'
@@ -118,10 +115,19 @@ export const FlatSessionRow = React.memo(({ row, selected, showBorder, archived 
         : undefined;
 
     // The same `lastActivityAt` the flat list sorts on, so the stamps run in
-    // the order the rows do.
+    // the order the rows do. Null when there is no stamp, and then the edge
+    // stays empty (DROVE-398): the unread and gate signals ride on the time's
+    // colour, never on a mark drawn in its place.
     const timestamp = React.useMemo(
         () => formatSessionListTimestamp(session.lastActivityAt),
         [session.lastActivityAt],
+    );
+    const timeColor = presentation.time.type === 'accented' ? presentation.time.color : null;
+    const time = React.useMemo<SessionRowTime | null>(
+        () => timestamp === null
+            ? null
+            : { text: timestamp, color: timeColor, accessibilityLabel: timeAccessibilityLabel },
+        [timestamp, timeColor, timeAccessibilityLabel],
     );
 
     const [archiving, performArchive] = useHappyAction(async () => {
@@ -234,47 +240,29 @@ export const FlatSessionRow = React.memo(({ row, selected, showBorder, archived 
                             />
                         </View>
                     )}
-                    <View
-                        style={styles.topRightStatus}
-                        accessible={topRightAccessibilityLabel !== undefined}
-                        accessibilityRole={topRightAccessibilityLabel ? 'text' : undefined}
-                        accessibilityLabel={topRightAccessibilityLabel}
-                    >
-                        {presentation.topRight.type === 'dot' ? (
-                            <StatusDot
-                                color={presentation.topRight.color}
-                                size={TOP_RIGHT_DOT_SIZE}
-                            />
-                        ) : (
-                            <Text style={styles.timestamp} numberOfLines={1}>
-                                {timestamp}
-                            </Text>
-                        )}
-                    </View>
-                </View>
-
-                {/*
-                  * The little status (DROVE-393), at the row's trailing edge
-                  * under the timestamp: the harness glyph, then the same dot
-                  * the card row draws, from the same facts. On this line
-                  * rather than the title's because the title line already
-                  * carries the shortcut hint, the bolt, the reading mark and
-                  * the time, and a title is the one thing on the row that
-                  * should not lose width to a mark. The flat row's draft
-                  * pencil lives below with the git counts, so the slot here
-                  * never swaps to it. Retired work draws the glyph alone.
-                  */}
-                <View style={styles.projectRow}>
-                    <Text style={styles.project} numberOfLines={1}>
-                        {projectName}
-                    </Text>
+                    {/*
+                      * The trailing end (DROVE-393, DROVE-398), on this line
+                      * with the bolt and the reading mark: the harness glyph,
+                      * the same dot the card row draws from the same facts,
+                      * then the time at the edge. sessionRowTrailingLayout.ts
+                      * has the order and the why. The flat row's draft pencil
+                      * lives below with the git counts, so the slot here never
+                      * swaps to it. Retired work draws the glyph and the time
+                      * and no dot.
+                      */}
                     <SessionRowTrailing
                         flavor={session.flavor}
                         clientId={session.clientId}
                         dot={archived ? null : session.dot}
                         hasDraft={false}
+                        time={time}
                     />
                 </View>
+
+                {/* Nothing trails on this line (DROVE-398): the whole trailing end is on the title's. */}
+                <Text style={styles.project} numberOfLines={1}>
+                    {projectName}
+                </Text>
 
                 <View style={styles.workspaceRow}>
                     <View style={styles.workspaceLocation}>
@@ -418,33 +406,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'center',
         justifyContent: 'center',
     },
-    // The dot and time share a Telegram-like right column, so changing status
-    // never makes the title jump horizontally. It is only as wide as the
-    // longest timestamp; the dot occupies that same slot instead of reserving
-    // a second lane.
-    topRightStatus: {
-        width: TOP_RIGHT_SLOT_WIDTH,
-        height: 22,
-        flexShrink: 0,
-        marginLeft: 8,
-        alignItems: 'flex-end',
-        justifyContent: 'center',
-    },
-    timestamp: {
-        fontSize: 13,
-        lineHeight: 22,
-        color: theme.colors.textSecondary,
-        fontVariant: ['tabular-nums'],
-        textAlign: 'right',
-        ...Typography.default('regular'),
-    },
-    projectRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
     project: {
-        flex: 1,
-        minWidth: 0,
         fontSize: 15,
         lineHeight: 20,
         color: theme.colors.textSecondary,
