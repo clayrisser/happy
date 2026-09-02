@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { Text, TextInput, Platform, View, NativeSyntheticEvent, TextInputKeyPressEventData, TextInputSelectionChangeEventData } from 'react-native';
+import { Text, TextInput, Platform, View, NativeSyntheticEvent, TextInputContentSizeChangeEventData, TextInputKeyPressEventData, TextInputSelectionChangeEventData } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
+import { resolveMultiTextInputLayout } from './multiTextInputLayout';
 
 export type SupportedKey = 'Enter' | 'Escape' | 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight' | 'Tab';
 
@@ -103,11 +104,78 @@ export const MultiTextInput = React.memo(React.forwardRef<MultiTextInputHandle, 
             inputRef.current.setSelection(sel.start, sel.end);
         }
     });
+    /**
+     * WHAT THE FIELD MEASURED, AND THE TEXT IT MEASURED IT ON (DROVE-350).
+     *
+     * Clay: "After speaking into the speech bubble and then submitting, it
+     * leaves all this random empty space." The photograph is the composer
+     * holding the empty placeholder inside a bubble still as tall as the four
+     * dictated lines.
+     *
+     * The field had no resolved height at all: the row carries a floor and a
+     * ceiling and everything between them was this input's intrinsic
+     * measurement. That is fine while every write is a keystroke, and it is not
+     * fine for the composer, where BOTH of the writes that matter are
+     * programmatic — dictation puts the transcript in through
+     * `setTextAndSelection`, and the send takes it out the same way. Neither
+     * carries a native text-change event, and an iOS field measures from the
+     * most recent attributed string it was TOLD about, falling back to the state
+     * the native view last reported when the react tree's own string has not
+     * moved since that report. So the tall measurement outlived the clear and
+     * nothing recomputed a height from the value.
+     *
+     * THE MEASUREMENT IS KEYED TO ITS TEXT, which is what makes this a
+     * derivation rather than a cache. A content size is only trusted for the
+     * string it was taken on; anything else is treated as unmeasured, and an
+     * unmeasured non-empty field falls back to the intrinsic sizing it has
+     * always had. What is NOT left to the native view is the empty case:
+     * `resolveMultiTextInputLayout` answers the one-line floor for a value with
+     * nothing in it whatever was last measured, which is the same `hasText`
+     * guard Home has used since DROVE-345 and the whole of the difference
+     * between a composer that comes back and one that does not.
+     *
+     * No timer, and no offset anybody worked out (DROVE-214, DROVE-320): the
+     * height is the resolver's, read off the value.
+     */
+    const [measured, setMeasured] = React.useState<{ text: string; height: number }>({ text: '', height: 0 });
+    const handleContentSizeChange = React.useCallback((
+        e: NativeSyntheticEvent<TextInputContentSizeChangeEventData>,
+    ) => {
+        const height = Math.ceil(e.nativeEvent.contentSize.height);
+        setMeasured((current) => (
+            current.height === height && current.text === latestTextRef.current
+                ? current
+                : { text: latestTextRef.current, height }
+        ));
+    }, []);
+    const layout = resolveMultiTextInputLayout({
+        contentHeight: measured.text === text ? measured.height : 0,
+        hasText: text.length > 0,
+        maxHeight,
+        lineHeight,
+        paddingTop: props.paddingTop ?? 0,
+        paddingBottom: props.paddingBottom ?? 0,
+    });
+    /**
+     * The height the field is drawn at, or `undefined` where the native view's
+     * own measurement is still the better answer.
+     *
+     * A single-line field never grows, so it has nothing to come back from and
+     * is left alone. A multiline field that is EMPTY is always resolved, because
+     * that is the state the stale measurement strands. One that holds text is
+     * resolved once it has reported a size for that text, and until then keeps
+     * the intrinsic sizing it has always had — so a draft restored on session
+     * open never flashes at one line on its way to its real height.
+     */
+    const resolvedHeight = multiline && (text.length === 0 || measured.text === text)
+        ? layout.height
+        : undefined;
     const textStyle = {
         width: '100%' as const,
         fontSize: MULTI_TEXT_INPUT_FONT_SIZE,
         lineHeight,
         maxHeight,
+        height: resolvedHeight,
         color: theme.colors.input.text,
         textAlignVertical: multiline ? 'top' as const : 'center' as const,
         padding: 0,
@@ -261,6 +329,7 @@ export const MultiTextInput = React.memo(React.forwardRef<MultiTextInputHandle, 
                     value={text}
                     editable={editable}
                     onChangeText={handleTextChange}
+                    onContentSizeChange={handleContentSizeChange}
                     onKeyPress={handleKeyPress}
                     onSelectionChange={handleSelectionChange}
                     multiline={multiline}
