@@ -41,11 +41,14 @@ import { dictationComposerEvents } from './dictationComposer';
  * simply waiting in the composer when he next looks, which is the only place
  * he would think to look for it.
  *
- * A HEADPHONE PRESS NEVER SENDS (DROVE-105), and this is the path where that
- * matters most: there is no lift, no screen, and no way to check what was
- * heard before it goes. `send` below is wired to nothing on purpose rather
- * than left off the port, so a future reason that sets `shouldSend` cannot
- * quietly reach an agent from his pocket.
+ * ONE GESTURE SENDS, AND IT IS THE ONE HE NAMED (DROVE-370). `close` — every
+ * route that is not a deliberate second triple press: the idle stop, a
+ * recogniser giving up, a read-aloud interrupt, a screen arriving to take the
+ * capture over — still runs `capture.stop()`, whose commit carries
+ * `shouldSend: false`, so the words land in the draft and wait. Only `commit`
+ * sends, and only micPress.ts's closing press calls it. DROVE-105's rule that
+ * a capture ending is not by itself a send is therefore intact; what changed
+ * is that there is now a gesture that asks.
  *
  * ## The idle clock runs here, and it is not optional
  *
@@ -72,6 +75,15 @@ export interface HeadlessDictationDeps {
     draft(session: string): string;
     /** Put the words where the composer will find them. `updateSessionDraft`. */
     setDraft(session: string, text: string): void;
+    /**
+     * Send what was dictated, as a message to that session (DROVE-370).
+     *
+     * `sync.sendMessage(session, text, { source: 'voice' })`, which is the
+     * same call the composer's Send makes and the same one the wrist's
+     * dictation makes (DROVE-92). Reached ONLY from `commit`, never from
+     * `close`, so the on-screen contract is untouched.
+     */
+    send(session: string, text: string): void;
     /**
      * Keep the reader off the audio session for the WHOLE capture, not merely
      * cut it: a reply still streaming in would queue another sentence a moment
@@ -102,6 +114,8 @@ export interface HeadlessDictationPort {
     settling(): boolean;
     open(session: string): void;
     close(): void;
+    /** Close AND send. The headphone triple press's own verb (DROVE-370). */
+    commit(): void;
 }
 
 export class HeadlessDictation implements HeadlessDictationPort {
@@ -137,10 +151,39 @@ export class HeadlessDictation implements HeadlessDictationPort {
                 setComposerText: (text) => {
                     if (this.into !== null) this.deps.setDraft(this.into, text);
                 },
-                // A HEADPHONE PRESS NEVER SENDS (DROVE-105). Only a lift sends
-                // and there is no lift; the words wait in the draft where he
-                // can read them before they go anywhere.
-                send: () => { },
+                // A SECOND TRIPLE PRESS SENDS, and nothing else here does
+                // (DROVE-370). This is reached only through `commit`, which
+                // only the headphone press calls; `close` still runs
+                // `capture.stop()`, whose commit carries `shouldSend: false`,
+                // so every other way this capture can end still leaves the
+                // words in the draft.
+                //
+                // WHAT DROVE-105 ACTUALLY RULED, since this is the line that
+                // used to cite it as a flat refusal: only a LIFT sends, and a
+                // headphone press has no lift, so there was no gesture that
+                // could ask. Clay has now named one — "triple tap should also
+                // end it, and when it ends it should auto-submit" — and it is
+                // a deliberate second press, not a mis-press: the mic is
+                // already open, he already heard the open cue, and the close
+                // cue answers this one. The on-screen rule is unchanged,
+                // because the screen is where he can read the words first.
+                send: () => {
+                    const into = this.into;
+                    if (into === null) return;
+                    // Read the draft back rather than trusting a captured
+                    // string: `onCommit` writes the joined text through
+                    // `setComposerText` immediately before calling this, and
+                    // DROVE-360's ownership check may have declined that
+                    // write. What is in the draft is what he would have seen.
+                    const text = this.deps.draft(into).trim();
+                    if (text.length === 0) return;
+                    this.deps.send(into, text);
+                    // A send clears the composer, so it clears the draft the
+                    // composer hydrates from. Leaving it would put the sent
+                    // sentence back in front of him the next time he opened
+                    // the session.
+                    this.deps.setDraft(into, '');
+                },
                 onError: (message) => this.deps.onError(message),
                 onChange: (state) => this.onChange(state),
             }),
@@ -195,6 +238,20 @@ export class HeadlessDictation implements HeadlessDictationPort {
     /** The second press. The words stay in the draft; nothing is sent. */
     close(): void {
         this.capture.stop();
+    }
+
+    /**
+     * The second TRIPLE PRESS: close the microphone and send (DROVE-370).
+     *
+     * `capture.send()` is the same call a lift on the composer's button makes,
+     * so the words go out through `onCommit(text, true, 'send')` (DROVE-350)
+     * and nothing about how a transcript is assembled is duplicated here.
+     * `DictationCapture.finish` discards instead of committing when the final
+     * trims to nothing, so a press into silence closes and sends nothing
+     * without this file having to check.
+     */
+    commit(): void {
+        this.capture.send();
     }
 
     /** Tests only. The app's instance lives as long as the app does. */

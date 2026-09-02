@@ -542,6 +542,25 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
         dispatch({ type: 'pressOut', at });
     }, [canPress, dispatch]);
     const onTalkCancel = React.useCallback(() => capture.discard('left-session'), [capture]);
+    /**
+     * The headphone triple press ENDING the capture, which sends (DROVE-370).
+     *
+     * Not `onTalkTap`, and the difference is the whole point: a tap stops and
+     * keeps the words on screen for him to read (DROVE-105), and this sends
+     * them, because the hand that pressed it is not on the phone. Same
+     * capture, same reducer, same transcript — only `capture.send()` in place
+     * of the stop, which is the same call the lift on the talk button makes.
+     *
+     * A FINGER ON THE MIC WINS, exactly as it does for `onTalkTap`. Two
+     * controls driving one gesture at once is a headphone squeeze mid-hold,
+     * and the lift belongs to the finger: it will send or cancel on its own
+     * terms, and a send fired out from under it would commit a sentence he was
+     * still in the middle of sliding off to cancel.
+     */
+    const onTalkCommit = React.useCallback(() => {
+        if (gestureRef.current.pressedAt !== null) return;
+        capture.send();
+    }, [capture]);
 
     const offersReadAloud = active && canReadAloud();
     // No talk button during a call: the pill's mic IS the mic then, and a
@@ -581,12 +600,15 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
      */
     const talkTapRef = React.useRef(onTalkTap);
     talkTapRef.current = onTalkTap;
+    const talkCommitRef = React.useRef(onTalkCommit);
+    talkCommitRef.current = onTalkCommit;
     React.useEffect(() => {
         if (!offersDictation) return;
         return registerDictationSurface({
             session: sessionId,
             capturing: () => capture.current.active,
             tap: () => talkTapRef.current(),
+            commit: () => talkCommitRef.current(),
         });
     }, [offersDictation, sessionId, capture]);
 

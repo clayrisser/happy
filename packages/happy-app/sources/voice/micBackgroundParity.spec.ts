@@ -70,6 +70,7 @@ async function settle(): Promise<void> {
 describe('a triple press with the app backgrounded and no screen mounted', () => {
     let recogniser: FakeRecogniser;
     let drafts: Record<string, string>;
+    let sent: Array<{ session: string; text: string }>;
     let held: boolean[];
     let cuts: number;
     let cues: AudioCueId[];
@@ -89,6 +90,7 @@ describe('a triple press with the app backgrounded and no screen mounted', () =>
         resetDictationSurfaces();
         recogniser = new FakeRecogniser();
         drafts = {};
+        sent = [];
         held = [];
         cuts = 0;
         cues = [];
@@ -105,6 +107,7 @@ describe('a triple press with the app backgrounded and no screen mounted', () =>
             engine: recogniser,
             draft: (session) => drafts[session] ?? '',
             setDraft: (session, text) => { drafts[session] = text; },
+            send: (session, text) => { sent.push({ session, text }); },
             micHeld: (next) => { held.push(next); },
             cutReading: () => {
                 cuts += 1;
@@ -218,7 +221,11 @@ describe('a triple press with the app backgrounded and no screen mounted', () =>
         expect(held).toEqual([true, false]);
     });
 
-    it('closes on a second press, keeps the words and SENDS NOTHING', async () => {
+    it('closes on a second press AND SENDS what he said, exactly once (DROVE-370)', async () => {
+        // Clay: "triple tap should also end it, and when it ends it should
+        // auto-submit." The hands-free path has no screen to read the words on
+        // and no send button to press, so the gesture that ends the capture is
+        // the gesture that sends it.
         press(TRIPLE);
         runCue();
         await settle();
@@ -230,12 +237,53 @@ describe('a triple press with the app backgrounded and no screen mounted', () =>
         await settle();
 
         expect(cues).toEqual(['micOpen', 'micClosed']);
-        // DROVE-105: only a LIFT sends, and a headphone press has no lift. A
-        // close is a `stop`, which transcribes and keeps; `send` is never
-        // reached from here, which the source assertion at the bottom pins.
         expect(recogniser.stops).toBe(1);
-        expect(drafts.s1).toBe('this is a note');
+        expect(sent).toEqual([{ session: 's1', text: 'this is a note' }]);
+        // A send clears the composer, so it clears the draft the composer
+        // hydrates from. Leaving it would put the sent sentence back in front
+        // of him the next time he opened the session.
+        expect(drafts.s1).toBe('');
         expect(headless.capturing()).toBe(false);
+    });
+
+    it('a second press with nothing heard closes SILENTLY and sends nothing', async () => {
+        // A mis-press, or a press into a room that stayed quiet. There is no
+        // message to send, and inventing an empty one would put a blank turn
+        // in front of the agent. `DictationCapture.finish` discards rather
+        // than commits on an empty final, so this falls out of the commit path
+        // rather than being a second rule.
+        press(TRIPLE);
+        runCue();
+        await settle();
+
+        press(TRIPLE);
+        await settle();
+        recogniser.settleStop('');
+        await settle();
+
+        expect(cues).toEqual(['micOpen', 'micClosed']);
+        expect(sent).toEqual([]);
+        expect(drafts.s1 ?? '').toBe('');
+        expect(headless.capturing()).toBe(false);
+    });
+
+    it('sends what is in the draft, base and all, not only the last segment', async () => {
+        // The base is the draft he already had. A send that posted only the
+        // recogniser's final would drop it, which is the same class of bug as
+        // DROVE-140's duplication seen from the other side.
+        drafts.s1 = 'earlier words';
+
+        press(TRIPLE);
+        runCue();
+        await settle();
+        partial('and then some');
+
+        press(TRIPLE);
+        await settle();
+        recogniser.settleStop('and then some');
+        await settle();
+
+        expect(sent).toEqual([{ session: 's1', text: 'earlier words and then some' }]);
     });
 
     it('stops itself when the latch goes idle, so a pocket mic is never stranded', async () => {
@@ -260,6 +308,9 @@ describe('a triple press with the app backgrounded and no screen mounted', () =>
         expect(headless.capturing()).toBe(false);
         expect(drafts.s1).toBe('a half sentence');
         expect(ticks.length).toBe(0);
+        // ONLY A PRESS SENDS (DROVE-370). A timeout is not him asking for
+        // anything, so the words wait in the draft exactly as they always did.
+        expect(sent).toEqual([]);
     });
 
     it('survives the recogniser finalising an utterance mid-pause', async () => {
@@ -292,6 +343,8 @@ describe('a triple press with the app backgrounded and no screen mounted', () =>
 
         expect(headless.capturing()).toBe(false);
         expect(drafts.s1).toBe('half said');
+        // A call taking the audio is not him pressing anything (DROVE-370).
+        expect(sent).toEqual([]);
     });
 
     it('writes into the session of the CURRENT press, not the one before it', async () => {
@@ -315,7 +368,12 @@ describe('a triple press with the app backgrounded and no screen mounted', () =>
 
         expect(headless.session).toBe('s2');
         expect(drafts.s2).toBe('second note');
-        expect(drafts.s1).toBe('first note');
+        // s1's note LEFT as a message rather than sitting in its draft, which
+        // is DROVE-370's closing press doing its job. What this test is about
+        // is unchanged: the second capture is pointed at s2 and nothing it
+        // hears reaches s1.
+        expect(sent).toEqual([{ session: 's1', text: 'first note' }]);
+        expect(drafts.s1).toBe('');
     });
 
     it('will not open a second capture over a live one', async () => {
@@ -360,29 +418,46 @@ function read(relative: string): string {
 }
 
 /**
- * A HEADPHONE PRESS NEVER SENDS, read out of the source (DROVE-105).
+ * ONE GESTURE SENDS, AND IT IS THE ONE HE NAMED (DROVE-370, superseding this
+ * file's DROVE-105 source assertion).
  *
- * `DictationCapture.send()` is the only path that sets `shouldSend`, and the
- * behaviour test above cannot prove a call that is not there: an assertion on
- * a counter nothing increments passes whether or not the rule holds. So the
- * rule is asserted where it actually lives — this path calls `stop()` and
- * never `send()`, and its composer port's `send` is wired to nothing.
+ * What used to be here read `headlessDictation.ts` as text and asserted that
+ * `capture.send` was never called and the composer port's `send` was wired to
+ * `() => {}`. That was the right shape of proof for a rule that said NOTHING
+ * may send: the behaviour tests cannot prove the absence of a call, because an
+ * assertion on a counter nothing increments passes either way.
  *
- * Coarse, and it catches the exact regression that matters: a sentence said
- * into a pocket reaching an agent with nobody having read it first.
+ * The rule is no longer "nothing sends". Clay named a gesture — the second
+ * triple press — so the claim worth pinning changed from an absence to a
+ * BOUNDARY: exactly one route sends, and every other way a capture can end
+ * still leaves the words in the draft. A boundary is testable behaviourally,
+ * and behaviourally is better than by regex, so it is asserted with a spy on
+ * the send dep rather than by reading the file.
+ *
+ * The regression this guards is unchanged and is the reason the old assertion
+ * existed: a sentence said into a pocket reaching an agent that he never asked
+ * to send. It can now happen only on a deliberate second press, after the open
+ * cue he already heard, answered by the close cue.
  */
-describe('a press in his pocket cannot send (DROVE-105)', () => {
+describe('exactly one route sends, and it is the closing press (DROVE-370)', () => {
     const source = read('voice/headlessDictation.ts');
 
-    it('never calls send on the capture', () => {
-        expect(source).not.toMatch(/\bcapture\.send\s*\(/);
+    it('close() still stops the capture rather than sending it', () => {
+        expect(source).toMatch(/close\(\): void \{\s*this\.capture\.stop\(\);/);
     });
 
-    it('stops the capture instead', () => {
-        expect(source).toMatch(/\bcapture\.stop\s*\(/);
+    it('commit() is the only thing that calls send on the capture', () => {
+        const calls = source.match(/\bthis\.capture\.send\s*\(/g) ?? [];
+        expect(calls.length).toBe(1);
+        expect(source).toMatch(/commit\(\): void \{\s*this\.capture\.send\(\);/);
     });
 
-    it('wires the composer port send to nothing', () => {
-        expect(source).toMatch(/send:\s*\(\)\s*=>\s*\{\s*\}/);
+    it('and micPress calls commit only to CLOSE, never to open', () => {
+        // Opening still goes through `open`/`tap`. A `commit` on the opening
+        // branch would send whatever happened to be in the draft already.
+        const press = read('voice/micPress.ts');
+        expect(press).toMatch(/if \(deps\.headless\.capturing\(\)\) \{\s*deps\.headless\.commit\(\);/);
+        expect(press).toMatch(/if \(surface !== null && surface\.capturing\(\)\) \{\s*surface\.commit\(\);/);
+        expect(press).toMatch(/deps\.headless\.open\(target\.session\);/);
     });
 });

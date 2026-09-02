@@ -184,13 +184,24 @@ export function startMicPress(deps: MicPressDeps): () => void {
             // double press is one gesture away — and a close that re-asked the
             // rule would refuse and leave a hot microphone in his pocket that
             // no gesture can shut.
+            //
+            // AND THE CLOSING PRESS SENDS (DROVE-370). Clay: "triple tap
+            // starts the mic, but triple tap should also end it, and when it
+            // ends it should auto-submit." So the close is `commit`, not
+            // `close`/`tap` — the same `onCommit(text, true, 'send')` a lift
+            // on the composer's button makes. Both targets get the same verb,
+            // because the gesture is the same gesture whether or not a screen
+            // happens to be mounted, which is the parity this whole file
+            // exists for. DROVE-105's on-screen rule is untouched: a second
+            // TAP on the composer's own mic still stops and keeps the words,
+            // and `surface.tap()` is still what that tap calls.
             if (deps.headless.capturing()) {
-                deps.headless.close();
+                deps.headless.commit();
                 return;
             }
             const surface = deps.mounted();
             if (surface !== null && surface.capturing()) {
-                surface.tap();
+                surface.commit();
                 return;
             }
             const target = resolve();

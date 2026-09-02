@@ -9,8 +9,8 @@ import {
 import {
     isDuplicateRemotePress,
     readAloudTransport,
+    remoteTransportEffect,
     remoteTransportGesture,
-    transportEffect,
     type RemotePress,
 } from './readAloudTransport';
 
@@ -137,6 +137,30 @@ export function startBackgroundAudio(reader: BackgroundReader): () => void {
     // per keystroke is worth avoiding.
     let published: string | null = null;
     /**
+     * WHEN the reader became paused, by whichever surface paused it
+     * (DROVE-370).
+     *
+     * A headset with one word for its one button sends `pause` to resume,
+     * because it has nothing else to send, and this is what tells that press
+     * apart from the same unit re-asserting `pause` a few milliseconds after
+     * our DROVE-362 republish. It is set from `apply`, which the reader's
+     * transport listener already drives, so a pause taken on the ON-SCREEN
+     * speaker starts the same clock as one taken in his pocket — pressing the
+     * headphone a second later then resumes, whichever surface did the pause.
+     *
+     * Only the transition sets it. `apply` also runs on every interrupt and
+     * every app-state change, and re-stamping it there would make the second
+     * press unreachable on a phone that so much as changed audio route.
+     */
+    let pausedSince: number | null = null;
+    const notePaused = () => {
+        if (readAloudTransport(reader.isEnabled, reader.isPaused) !== 'paused') {
+            pausedSince = null;
+            return;
+        }
+        if (pausedSince === null) pausedSince = Date.now();
+    };
+    /**
      * Say what the reader is doing, and MEAN it (DROVE-362).
      *
      * `force` is the whole of this ticket. Publishing only on a change makes
@@ -169,6 +193,7 @@ export function startBackgroundAudio(reader: BackgroundReader): () => void {
     };
     const apply = () => {
         try {
+            notePaused();
             reader.setBackgrounded(backgrounded);
             // Hold whenever read-aloud is ON, foreground included (DROVE-233
             // nowplaying-card). It used to be `backgrounded && isEnabled`,
@@ -271,7 +296,13 @@ export function startBackgroundAudio(reader: BackgroundReader): () => void {
         lastRemote = { command, at };
         try {
             const before = readAloudTransport(reader.isEnabled, reader.isPaused);
-            const effect = transportEffect(gesture, before);
+            // `remoteTransportEffect` is `transportEffect` with the one extra
+            // cell a remote press needs (DROVE-370): a `pause` that lands on a
+            // reader that has BEEN paused for more than a second is him
+            // pressing the one button his headset has, not that headset
+            // echoing our own republish, and it resumes. Every other cell is
+            // the DROVE-327 table verbatim.
+            const effect = remoteTransportEffect(gesture, before, pausedSince, at);
             if (effect === 'pause') reader.setPaused(true);
             else if (effect === 'resume') reader.setPaused(false);
             // 'turn-on', 'turn-off' and 'nothing' are unreachable from a remote
@@ -310,6 +341,7 @@ export function startBackgroundAudio(reader: BackgroundReader): () => void {
         started = false;
         held = null;
         published = null;
+        pausedSince = null;
         lastRemote = null;
         appState.remove();
         enabledChanged();
