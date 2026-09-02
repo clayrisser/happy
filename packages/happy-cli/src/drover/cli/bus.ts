@@ -115,9 +115,40 @@ async function request(url: string, init: RequestInit, timeoutMs: number): Promi
     return { status: res.status, body: await res.text() };
 }
 
+export interface BusRequestOptions {
+    /** How long the request may take, in milliseconds. */
+    timeoutMs: number;
+    /** The body, ALREADY serialised — bytes, so the caller owns the encoding. */
+    body?: string;
+    /** Headers. Content-Type is the caller's to set when it sends a body. */
+    headers?: Record<string, string>;
+    /** The bus. Defaults to DROVER_URL, the way every shell verb reads it. */
+    base?: string;
+}
+
+/**
+ * Any method, one request path (DROVE-315 wave 4).
+ *
+ * `drover settings` writes with PATCH and DELETE, which the shell spelled as
+ * `curl -X PATCH` inside lib/drover-settings.sh — a second copy of the timeout,
+ * the `2>/dev/null` and the exit-code vocabulary, one file away from the one in
+ * lib/drover-bus.sh. Here there is one: busGet, busPost and every settings call
+ * go through this, so `refused` / `timeout` / `resolve` are classified once and
+ * a new method cannot arrive with its own idea of what a down bus looks like.
+ *
+ * `path` starts with a slash. Nothing here retries and nothing here decides.
+ */
+export function busRequest(method: string, path: string, opts: BusRequestOptions): Promise<BusResponse> {
+    const base = opts.base ?? droverEnv().droverUrl;
+    const init: RequestInit = { method };
+    if (opts.headers) init.headers = opts.headers;
+    if (opts.body !== undefined) init.body = opts.body;
+    return request(`${base}${path}`, init, opts.timeoutMs);
+}
+
 /** GET <bus>/<path>. `path` starts with a slash; the bus comes from the env. */
 export function busGet(path: string, timeoutMs: number, base: string = droverEnv().droverUrl): Promise<BusResponse> {
-    return request(`${base}${path}`, { method: 'GET' }, timeoutMs);
+    return busRequest('GET', path, { timeoutMs, base });
 }
 
 /** POST a JSON body to <bus>/<path>. */
@@ -127,9 +158,10 @@ export function busPost(
     timeoutMs: number,
     base: string = droverEnv().droverUrl,
 ): Promise<BusResponse> {
-    return request(
-        `${base}${path}`,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+    return busRequest('POST', path, {
         timeoutMs,
-    );
+        base,
+        body: JSON.stringify(body),
+        headers: { 'Content-Type': 'application/json' },
+    });
 }
