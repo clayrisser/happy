@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatSessionListTimestamp } from './sessionListTimestamp';
+import { formatSessionListTimestamp, widestSessionListTimestamp } from './sessionListTimestamp';
 
 const now = new Date(2026, 7, 23, 14, 30).getTime(); // Sunday 23 Aug 2026
 
@@ -39,5 +39,26 @@ describe('formatSessionListTimestamp', () => {
 
     it('adds the year once the date leaves this one', () => {
         expect(formatSessionListTimestamp(new Date(2025, 10, 4, 8, 0).getTime(), now)).toBe('11/04/25');
+    });
+});
+
+describe('a row with no stamp (DROVE-398)', () => {
+    it('draws nothing rather than the epoch', () => {
+        const now = new Date(2026, 7, 20, 14, 0).getTime();
+        expect(formatSessionListTimestamp(0, now)).toBeNull();
+        expect(formatSessionListTimestamp(null, now)).toBeNull();
+        expect(formatSessionListTimestamp(undefined, now)).toBeNull();
+        expect(formatSessionListTimestamp(Number.NaN, now)).toBeNull();
+    });
+});
+
+describe('the widest stamp', () => {
+    it('is a real output of the formatter, and no other output is wider', () => {
+        const now = new Date(2026, 7, 20, 14, 0).getTime();
+        const widest = widestSessionListTimestamp(now);
+        expect(formatSessionListTimestamp(widest.at, now)).toBe(widest.text);
+        expect(widest.text.length).toBeGreaterThanOrEqual((formatSessionListTimestamp(now - 60_000, now) ?? '').length);
+        expect(widest.text.length).toBeGreaterThanOrEqual((formatSessionListTimestamp(now - 3 * 86_400_000, now) ?? '').length);
+        expect(widest.text.length).toBeGreaterThanOrEqual((formatSessionListTimestamp(now - 400 * 86_400_000, now) ?? '').length);
     });
 });

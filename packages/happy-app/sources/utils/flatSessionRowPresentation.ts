@@ -2,33 +2,38 @@ import type { SessionState } from '@/sync/sessionState';
 import { statusDotColors } from '@/components/statusDotState';
 
 /**
- * THE FLAT ROW'S MARK IS A BADGE, NOT THE SESSION'S DOT (DROVE-243).
+ * THE FLAT ROW'S SIGNAL RIDES ON THE TIME, NOT ON A DOT (DROVE-243, DROVE-398).
  *
- * Worth stating, because it is the one place a session row draws something
- * round and deliberately does NOT speak DROVE-231's vocabulary. This mark sits
- * in the TIMESTAMP slot and replaces it, so it can only ever appear on the few
- * rows that have something to say; a dot that means "connected" would take
- * every row's timestamp away to tell Clay what he can already see. It is the
- * unread badge from any chat list, and the row's status lives elsewhere: the
- * title shimmers while the session works, and it fades when the session is
- * gone.
+ * Worth stating, because it is the one place a session row colours something
+ * that is not the dot and deliberately does NOT speak DROVE-231's vocabulary
+ * through a disc. This used to be a 20pt badge that REPLACED the time, the
+ * unread mark from any chat list. Then DROVE-393 put the row's real status
+ * dot on the same row, and a row with unread wore both: a 6pt dot saying
+ * `connected` beside a 20pt disc saying `unread`. Clay: "why the fuck did the
+ * dot get so big." So the badge is gone, the dot is drawn once (in the
+ * trailing slot, sessionRowTrailingLayout.ts), and what the badge used to say
+ * is said by the TIME'S COLOUR instead, the way a chat list tints the stamp
+ * on a row you have not read. A row with no stamp has nowhere to say it and
+ * says nothing: the edge stays empty rather than growing a mark.
  *
  * The blocked hue is `statusDotColors.waiting` all the same. That state means
  * the identical thing here and on the strip — the session is holding a
  * permission or a question for Clay — so the amber has one definition even
- * though the mark around it plays a different role.
+ * though the stamp around it plays a different role. It is louder than the
+ * dot on purpose: with the badge gone, the tinted stamp is the row's one
+ * attention signal, and a gate outranks unread the way it always did.
  */
-export const SESSION_READY_DOT_COLOR = '#007AFF';
-export const SESSION_BLOCKED_DOT_COLOR = statusDotColors.waiting;
+export const SESSION_UNREAD_ACCENT = '#007AFF';
+export const SESSION_BLOCKED_ACCENT = statusDotColors.waiting;
 
-export type FlatSessionRowTopRight =
-    | { type: 'dot'; color: string }
-    | { type: 'timestamp' };
+export type FlatSessionRowTime =
+    | { type: 'accented'; color: string }
+    | { type: 'plain' };
 
 /**
  * Keeps the flat row's two progress signals mutually exclusive: active work is
  * carried by the title shimmer, while only something the user should notice
- * replaces the ordinary timestamp with a Telegram-sized dot.
+ * tints the ordinary timestamp.
  */
 export function resolveFlatSessionRowPresentation({
     state,
@@ -40,29 +45,29 @@ export function resolveFlatSessionRowPresentation({
     faded: boolean;
 }): {
     shimmerTitle: boolean;
-    topRight: FlatSessionRowTopRight;
+    time: FlatSessionRowTime;
 } {
     if (faded) {
-        return { shimmerTitle: false, topRight: { type: 'timestamp' } };
+        return { shimmerTitle: false, time: { type: 'plain' } };
     }
 
     if (state === 'permission_required' || state === 'input_required') {
         return {
             shimmerTitle: false,
-            topRight: { type: 'dot', color: SESSION_BLOCKED_DOT_COLOR },
+            time: { type: 'accented', color: SESSION_BLOCKED_ACCENT },
         };
     }
 
     if (state === 'thinking') {
-        return { shimmerTitle: true, topRight: { type: 'timestamp' } };
+        return { shimmerTitle: true, time: { type: 'plain' } };
     }
 
     if (hasUnread) {
         return {
             shimmerTitle: false,
-            topRight: { type: 'dot', color: SESSION_READY_DOT_COLOR },
+            time: { type: 'accented', color: SESSION_UNREAD_ACCENT },
         };
     }
 
-    return { shimmerTitle: false, topRight: { type: 'timestamp' } };
+    return { shimmerTitle: false, time: { type: 'plain' } };
 }
