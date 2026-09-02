@@ -147,31 +147,17 @@ export const systemDaemonProbe: DaemonProbe = {
 };
 
 /**
- * `drover_home_path <new> <legacy>` — where a tree drover owns lives TODAY.
- * `drover home migrate` moves it under DROVER_HOME and leaves a symlink, so
- * both spellings resolve afterwards; before that run the legacy path is the
- * only truth. A machine is never sent to an empty directory while its state
- * sits in the other one.
- */
-function droverHomePath(next: string, legacy: string): string {
-    if (existsSync(next)) return next;
-    if (existsSync(legacy)) return legacy;
-    return next;
-}
-
-/**
- * DROVER_HAPPY_HOME, as etc/drover.env computes it. Official mode shares Clay's
- * own ~/.happy so `happy` in a terminal and the bridge are the SAME account on
- * the SAME server — otherwise the phone pairs with one of them and is blind to
- * the other. Relay mode keeps its own home under STATE_DIR, because those
- * credentials belong to a different server and must not overwrite the real ones.
+ * DROVER_HAPPY_HOME, as etc/drover.env computes it.
+ *
+ * The rule itself — official mode shares Clay's own ~/.happy so `happy` in a
+ * terminal and the bridge are the SAME account on the SAME server, relay mode
+ * keeps its own home because those credentials belong to a different server and
+ * must not overwrite the real ones — lives in env.ts beside the rest of
+ * etc/drover.env, with drover_home_path's new-then-legacy resolution (DROVE-309).
+ * This is the wrapper's name for it, kept so the signature reads locally.
  */
 export function droverHappyHome(env: Env = process.env, home: string = homedir()): string {
-    const stateDir = droverEnv(env, home).stateDir;
-    const mode = droverVar('DROVER_SERVER_MODE', 'official', env, home);
-    if (mode === 'relay') return droverVar('DROVER_HAPPY_HOME', join(stateDir, 'happy-home'), env, home);
-    const droverHome = droverVar('DROVER_HOME', join(home, '.drover'), env, home);
-    return droverVar('DROVER_HAPPY_HOME', droverHomePath(join(droverHome, 'happy'), join(home, '.happy')), env, home);
+    return droverEnv(env, home).droverHappyHome;
 }
 
 /**
