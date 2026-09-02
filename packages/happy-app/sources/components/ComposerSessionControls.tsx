@@ -647,7 +647,40 @@ function Control(props: {
                 ? { expanded: props.open, disabled: !pressable }
                 : { checked: props.toggled, disabled: !pressable }}
         >
-            <View style={[styles.fillPill, pill]}>
+            {/* THE PILL TAKES NO TOUCHES, AND THAT IS WHY THE DIAL OPENS
+                (DROVE-371).
+
+                Clay, on OTA 01a06004: "the effort button is not working." Lock,
+                speaker and model answered a tap and the dial did not, on a
+                session where the harness offers six levels and every gate in
+                the app says the segment is pressable.
+
+                The pill is the difference, and DROVE-343 is the date. Until
+                then it was mounted ONLY where a `fill` was passed — read-aloud
+                — and every other glyph was a direct child of this pressable.
+                343 mounted it on every segment so the open wash could round
+                itself, and that put a sized, coloured view between the finger
+                and three of the four glyphs. On three of them nothing changed,
+                because a glyph drawn as text never takes a touch off the
+                control around it. The dial is the fourth: it is
+                `react-native-svg`, and `RNSVGSvgView.hitTest` returns SELF for
+                every point inside its bounds whether or not anything is drawn
+                there (apple/Elements/RNSVGSvgView.mm). So the one segment whose
+                glyph is a native view with a hit test of its own is the one
+                segment that stopped opening.
+
+                `pointerEvents="none"` is the rule rather than the patch: NOTHING
+                inside a segment is pressable — not the pill, not the glyph, not
+                the model's name — so nothing inside a segment may be able to
+                take the segment's touch. It goes on the pill rather than on the
+                gauge because the pill is the one wrapper every segment has, so
+                the guarantee is the capsule's and not the dial's, and the next
+                glyph that is not text inherits it. `composerCapsuleTap.test.ts`
+                walks each segment and holds it.
+
+                It costs nothing: this view draws a colour and centres a glyph,
+                and the press it used to be able to intercept was never its own. */}
+            <View style={[styles.fillPill, pill]} pointerEvents="none">
                 {props.children}
             </View>
         </BubblePressable>
