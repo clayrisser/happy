@@ -97,3 +97,36 @@ describe('daemon spawns under the drover permission policy', () => {
     expect(resumed).toEqual(['claude', '--resume', 'abc', '--dangerously-skip-permissions']);
   });
 });
+
+// DROVE-381. gemini's pane runs the real TUI, so what the daemon forwards is
+// exactly what `drover gemini` hands the binary: a model and an approval mode.
+describe('daemon spawns of a gemini session', () => {
+  it('forwards an explicit mode and model, and no effort', () => {
+    const args: string[] = [];
+
+    appendDaemonSpawnModeArgs(args, {
+      directory: '/repo',
+      permissionMode: 'auto_edit',
+      modelMode: 'gemini-3.1-pro',
+      effortLevel: 'high',
+    }, 'gemini', true);
+
+    expect(args).toEqual(['--permission-mode', 'auto_edit', '--model', 'gemini-3.1-pro']);
+  });
+
+  it('treats default as no request, like Claude, and never adds the Claude bypass', () => {
+    const args: string[] = [];
+
+    appendDaemonSpawnModeArgs(args, { directory: '/repo', permissionMode: 'default', modelMode: 'default' }, 'gemini', true);
+
+    expect(args).toEqual([]);
+  });
+
+  it('passes the auto alias through, because it is a real gemini model id', () => {
+    const args: string[] = [];
+
+    appendDaemonSpawnModeArgs(args, { directory: '/repo', modelMode: 'auto' }, 'gemini', true);
+
+    expect(args).toEqual(['--model', 'auto']);
+  });
+});

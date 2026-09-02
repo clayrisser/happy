@@ -11,14 +11,20 @@
  * the list wearing nothing that said pi — the same avatar and the same
  * path-derived title as the claude sessions in the same project card. Clay
  * read that as the session never arriving at all.
+ *
+ * gemini followed in DROVE-381, the ticket that un-retired it. Its icon had
+ * shipped with the app all along; the retirement was the only thing keeping
+ * it out of this set, and DROVE-379 had already flagged that a returning row
+ * would arrive badge-free and repeat the pi bug.
  */
-export type AvatarHarnessIcon = 'claude' | 'codex' | 'agy' | 'pi' | 'rig';
+export type AvatarHarnessIcon = 'claude' | 'codex' | 'agy' | 'pi' | 'gemini' | 'rig';
 
 const ACTIVE_HARNESS_ICONS: ReadonlySet<string> = new Set([
     'claude',
     'codex',
     'agy',
     'pi',
+    'gemini',
 ]);
 
 export function resolveAvatarHarness(

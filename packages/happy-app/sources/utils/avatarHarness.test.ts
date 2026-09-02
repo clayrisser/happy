@@ -20,8 +20,14 @@ describe('resolveAvatarHarness', () => {
         expect(resolveAvatarHarness(null, 'rig')).toBe('rig');
     });
 
+    // DROVE-381. gemini's retirement expired (harnessCatalog.ts has the why),
+    // and DROVE-379 had already flagged that the returning row would carry no
+    // mark. The icon was in the bundle the whole time.
+    it('badges gemini, back from retirement with the icon it always shipped', () => {
+        expect(resolveAvatarHarness('gemini')).toBe('gemini');
+    });
+
     it('does not badge retired or unknown flavors', () => {
-        expect(resolveAvatarHarness('gemini')).toBeNull();
         expect(resolveAvatarHarness('openclaw')).toBeNull();
         expect(resolveAvatarHarness('future-harness')).toBeNull();
         expect(resolveAvatarHarness(null)).toBeNull();
