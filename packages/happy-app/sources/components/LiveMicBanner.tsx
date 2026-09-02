@@ -10,6 +10,7 @@ import { micOutcome } from '@/voice/micButton';
 import {
     RECORDING_BANNER_FRAME,
     RECORDING_BANNER_HEIGHT,
+    RECORDING_CLOCK_FONT_SIZE,
     RECORDING_WAVE_HEIGHT,
 } from './composerStripLayout';
 
@@ -200,11 +201,13 @@ const styles = StyleSheet.create({
      * The clock is the one piece of text left, and it is a readout rather than
      * a label. Tabular figures and a floor wide enough for `0:00` keep it from
      * jittering the row every second, and it never shrinks, so it cannot be
-     * the thing that truncates.
+     * the thing that truncates. Its size is a token in `composerStripLayout`
+     * because the level strip beside it is measured against these digits
+     * (DROVE-383): "it should be the same height as the characters".
      */
     elapsed: {
         color: '#FFFFFF',
-        fontSize: 12,
+        fontSize: RECORDING_CLOCK_FONT_SIZE,
         minWidth: 32,
         fontVariant: ['tabular-nums'],
         ...Typography.default('semiBold'),

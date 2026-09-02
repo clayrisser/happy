@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { micOutcome } from '@/voice/micButton';
+import { FULL_SCALE_DB, levelToHeight, rmsToLevel, TALKING_DISTANCE_DB } from '@/voice/micLevel';
+import { FontMetrics } from '@/constants/FontMetrics';
 import {
     MOBILE_COMPOSER_BASE_HEIGHT,
     MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT,
@@ -15,6 +17,8 @@ import {
     RECORDING_BANNER_FRAME,
     RECORDING_BANNER_HEIGHT,
     RECORDING_BANNER_INSET_TOP,
+    RECORDING_CLOCK_CAP_HEIGHT,
+    RECORDING_CLOCK_FONT_SIZE,
     resolveComposerStripHeight,
     resolveComposerStripOccupant,
     RECORDING_WAVE_HEIGHT,
@@ -153,6 +157,52 @@ describe('where the recording banner lives', () => {
         expect(RECORDING_WAVE_HEIGHT).toBeLessThan(RECORDING_BANNER_HEIGHT);
         // It is worth having at all: the 12pt it used to be was the defect.
         expect(RECORDING_WAVE_HEIGHT).toBeGreaterThan(12);
+    });
+
+    /**
+     * The second note, with a screenshot (IMG_0647 on DROVE-383): "the
+     * transform needs to be even bigger than this; it should be the same
+     * height as the characters." And again: not by changing the red bar.
+     *
+     * The characters are the clock's digits, whose ink is the cap height of
+     * 12pt IBM Plex Sans: 8.4. The strip does not become that tall (it would
+     * shrink every bar, and the test above pins it to the pill's inner 16);
+     * the MAP puts a phone at talking distance at or above the digits and
+     * keeps the top for a shout. Three numbers from three modules, held
+     * together here so none of them can move alone.
+     */
+    it('draws a talking-distance bar at least as tall as the clock digits, and still does not move the pill', () => {
+        const atDb = (db: number) => Math.pow(10, db / 20);
+        const bar = (db: number) => levelToHeight(rmsToLevel(atDb(db)), RECORDING_WAVE_HEIGHT);
+
+        // The digits: the size the banner renders them at, and their ink from
+        // the face's own metrics.
+        expect(RECORDING_CLOCK_FONT_SIZE).toBe(12);
+        expect(RECORDING_CLOCK_CAP_HEIGHT).toBe(RECORDING_CLOCK_FONT_SIZE * FontMetrics.default.capHeight);
+        expect(RECORDING_CLOCK_CAP_HEIGHT).toBeCloseTo(8.4, 1);
+
+        // The pill and the strip are where DROVE-383 left them.
+        expect(RECORDING_BANNER_HEIGHT).toBe(20);
+        expect(RECORDING_WAVE_HEIGHT).toBe(16);
+        expect(RECORDING_WAVE_HEIGHT + 2 * RECORDING_WAVE_INSET).toBe(RECORDING_BANNER_HEIGHT);
+        expect(RECORDING_CLOCK_CAP_HEIGHT).toBeLessThan(RECORDING_WAVE_HEIGHT);
+
+        // A person talking at a phone, -25 dBFS, draws a bar as tall as the
+        // digits or taller...
+        expect(bar(-25)).toBeGreaterThanOrEqual(RECORDING_CLOCK_CAP_HEIGHT);
+        // ...the loud edge of talking distance clears them and sits three
+        // quarters of the way up the strip, an ordinary voice 70%...
+        expect(bar(TALKING_DISTANCE_DB.loud)).toBeGreaterThan(RECORDING_CLOCK_CAP_HEIGHT);
+        expect(bar(TALKING_DISTANCE_DB.loud)).toBeGreaterThanOrEqual(RECORDING_WAVE_HEIGHT * 0.7);
+        expect(bar(TALKING_DISTANCE_DB.loud)).toBeLessThanOrEqual(RECORDING_WAVE_HEIGHT * 0.8);
+        expect(bar(-22)).toBeCloseTo(RECORDING_WAVE_HEIGHT * 0.7, 10);
+        // ...the quiet edge is within a point of them, so the whole band reads
+        // as the digits' height...
+        expect(bar(TALKING_DISTANCE_DB.quiet)).toBeGreaterThan(RECORDING_CLOCK_CAP_HEIGHT - 1);
+        // ...and -10 dBFS or louder fills the strip, which is still inside the
+        // pill.
+        expect(bar(FULL_SCALE_DB)).toBe(RECORDING_WAVE_HEIGHT);
+        expect(bar(0)).toBe(RECORDING_WAVE_HEIGHT);
     });
 
     it('keeps the strip the 20pt the dock arithmetic was measured against', () => {

@@ -18,6 +18,18 @@
  * falsify it, and it spends the range differently: silence sits on a thin
  * baseline and EVERY audible level gets its own height between that baseline
  * and the top, instead of a sixth of the range collapsing onto one square.
+ *
+ * WHY IT STILL READ SMALL (DROVE-383, second pass). With the bottom fixed the
+ * bars were still not the height of the clock beside them, and Clay said so
+ * with a screenshot (IMG_0647): "it should be the same height as the
+ * characters." Measured off that shot, talking distance drew 6..10pt against
+ * digits whose ink is 8.4, because full scale was 0 dBFS and nothing a phone
+ * hears from a mouth at arm's length gets within 10 dB of it. The top third of
+ * the strip was reserved for a level that never came. So full scale is -10
+ * dBFS now: talking distance runs 8..12pt, its loud edge three quarters of
+ * the strip, and only a shout fills it. The strip did not grow and the pill did
+ * not either; `composerStripLayout` pins both and holds this map against the
+ * digits' cap height, so the three cannot drift apart quietly.
  */
 
 /**
@@ -28,8 +40,23 @@
  * middle third.
  */
 export const SILENCE_DB = -45;
-/** This loud or louder fills the bar. */
-export const FULL_SCALE_DB = 0;
+/**
+ * This loud or louder fills the bar.
+ *
+ * -10 dBFS, not 0. A phone at talking distance peaks around -20 and 0 dBFS is
+ * a clipped shout into the grille; spending the top ten decibels on it left
+ * the top third of the strip empty in every real recording (IMG_0647 on
+ * DROVE-383 peaks at -19). Louder than this clamps, which is what a meter
+ * does at the top of its scale.
+ */
+export const FULL_SCALE_DB = -10;
+
+/**
+ * Where a phone held at talking distance lands, in dBFS: the band the map is
+ * designed around and the one the specs hold the picture to. Read off Clay's
+ * shots rather than chosen; the bars in IMG_0647 measure back to -32..-19.
+ */
+export const TALKING_DISTANCE_DB = { quiet: -30, loud: -20 } as const;
 
 /**
  * Silence is a thin line, not nothing: the strip stays a strip, and a dead
@@ -45,8 +72,8 @@ export const BASELINE_BAR_HEIGHT = 2;
  * straight line in RMS is not. Linear in RMS makes normal speech a sliver and
  * only a shout registers.
  *
- * The anchors, which the spec holds: at or below the gate, 0. At -20 dB,
- * about half. At full scale, 1.
+ * The anchors, which the spec holds: at or below the gate, 0. At -20 dB, the
+ * loud edge of talking distance, about 0.7. At -10 dB and above, 1.
  */
 export function rmsToLevel(rms: number): number {
     if (!Number.isFinite(rms) || rms <= 0) return 0;

@@ -29,7 +29,9 @@ import {
  * ordinary speech drawing four to seven points, so the strip read as a row of
  * identical dots that flickered. The height mapping moved into `micLevel` and
  * spends the range properly; here the strip simply got the pill's inner
- * height instead of a number that fit twice over.
+ * height instead of a number that fit twice over. The second pass on the same
+ * ticket moved full scale to -10 dBFS in `micLevel`, so a talking voice draws
+ * as tall as the clock's digits; nothing in this file changed for it.
  *
  * WHY SCALEY AND NOT HEIGHT. A bar is a fixed-height view scaled about its
  * centre, so a level update is a transform and not a layout prop. Twenty of

@@ -1,5 +1,6 @@
 import { MOBILE_COMPOSER_METRICS } from './agentInputLayout';
 import { STATUS_ROW_ROW_HEIGHT, STATUS_ROW_TEXT_LINE_HEIGHT } from './agentDockLayout';
+import { FontMetrics } from '@/constants/FontMetrics';
 
 /**
  * The strip under the composer card, and who is allowed to sit in it
@@ -152,6 +153,43 @@ export const RECORDING_WAVE_INSET = 2;
  * its clearance, and it changes only if the pill does.
  */
 export const RECORDING_WAVE_HEIGHT = RECORDING_BANNER_HEIGHT - RECORDING_WAVE_INSET * 2;
+
+/**
+ * The clock's type size: `0:07` in IBM Plex Sans SemiBold at this size, the
+ * one piece of text on the pill (DROVE-142).
+ *
+ * It lives here and not in the banner's stylesheet because the level strip is
+ * measured against it. Clay's second note on the waveform came with a
+ * screenshot (IMG_0647 on DROVE-383): "it should be the same height as the
+ * characters." The characters are these. `LiveMicBanner` reads this for the
+ * clock, so the height the spec argues about and the height on screen are the
+ * same number.
+ */
+export const RECORDING_CLOCK_FONT_SIZE = 12;
+
+/**
+ * How tall the clock's digits actually draw: their ink, the cap height, not
+ * the line box the text is laid out in. 8.4pt at 12, from the face's own
+ * metrics (`FontMetrics.default.capHeight`, read off the font file).
+ *
+ * This is the height Clay means by "the characters", and the strip is held to
+ * it the other way round from what you might expect: the strip is NOT this
+ * tall. It stays the pill's inner 16 (above), which the DROVE-383 spec pins
+ * above 12 and equal to the pill minus its clearance, and a strip 8.4 tall
+ * would have made every bar a quarter shorter than the shot he was already
+ * calling too small. Instead `micLevel` maps a phone at talking distance ONTO
+ * the digits' height: -25 dBFS draws 10pt against 8.4 of ink, -20 draws 12,
+ * and only -10 or louder reaches the top. The layout spec holds that relation,
+ * so the map, the type size and the strip cannot drift apart without one of
+ * them arguing.
+ *
+ * The strip and the pill do not follow the user's type size; the clock does
+ * (`allowFontScaling` is on). Up to the largest standard size, 1.235x, the
+ * digits are 10.3pt and the -25 dBFS bar is still 10, so the two stay level to
+ * the eye. Past that the digits win by a point or two, which is what the
+ * accessibility sizes are for.
+ */
+export const RECORDING_CLOCK_CAP_HEIGHT = RECORDING_CLOCK_FONT_SIZE * FontMetrics.default.capHeight;
 
 export interface RecordingBannerFrame {
     position: 'absolute';
