@@ -211,10 +211,28 @@ describe('plists', () => {
             expect(readFileSync(plist(s), 'utf8')).not.toContain('__');
         }
         expect(readFileSync(plist('bus'), 'utf8')).toContain(`<string>${labelPrefix}.bus</string>`);
-        // The daemon gets its OWN template: the shared one runs `drover
-        // <name>`, the daemon runs the wrapper that ADOPTS a running daemon.
-        expect(readFileSync(plist('daemon'), 'utf8')).toContain(`${droverDir}/libexec/drover-daemon`);
-        expect(readFileSync(plist('bus'), 'utf8')).toContain(`${droverDir}/bin/drover`);
+        // The daemon still gets its OWN template, but the COMMAND is no longer
+        // what separates it. It used to name libexec/drover-daemon by path,
+        // because `drover daemon` was a passthrough to the fork CLI and that
+        // cannot adopt a daemon already running. bin/drover has a `daemon)`
+        // case now, so both units run `drover <name>`: one command, one
+        // dispatch path (DROVE-315). Pin the whole argv, not a substring —
+        // a plist that ran the wrong thing would still CONTAIN the right path.
+        const programArgs = (xml: string): string[] => {
+            const block = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(xml);
+            expect(block, 'the unit must have a ProgramArguments array').not.toBeNull();
+            return [...(block?.[1] ?? '').matchAll(/<string>([^<]*)<\/string>/g)].map((m) => m[1]);
+        };
+        const daemonXml = readFileSync(plist('daemon'), 'utf8');
+        const busXml = readFileSync(plist('bus'), 'utf8');
+        expect(programArgs(daemonXml)).toEqual([`${droverDir}/bin/drover`, 'daemon']);
+        expect(programArgs(busXml)).toEqual([`${droverDir}/bin/drover`, 'bus']);
+        // What DOES still separate the two templates: the QoS pair the shared
+        // one carries (BASED-116) and the daemon's has never had. Fold the
+        // daemon into the shared template and this is the assertion that says
+        // the interactive band was a decision, not a side effect.
+        expect(busXml).toContain('<key>ProcessType</key>');
+        expect(daemonXml).not.toContain('<key>ProcessType</key>');
     });
 
     it('is byte-identical on a second run, and reports a changed template as updated', async () => {
