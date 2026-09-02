@@ -124,6 +124,10 @@ every drover start in DROVE-261.
 sweep that catches the OTHER failure (a merge that eats a \`;;\`) lives in
 tests/check.bats and \`make lint\`.
 
+A full run also checks bin/drover's OWNER TABLE against libexec/: every file
+has a row, every row has a file, and every node-owned verb is actually routed
+with \`run_node\`. Skipped under -q, so the CLI start path never pays for it.
+
 bin/drover runs this before it dispatches, except for \`drover statusline\`.
 DROVER_SKIP_CHECK=1 bypasses it, which is what you want while you are fixing
 the file it is complaining about.
@@ -147,6 +151,161 @@ To run anyway while you fix it:  DROVER_SKIP_CHECK=1 drover ...
 `;
 
 type Env = Record<string, string | undefined>;
+
+/**
+ * The explanation the shell cat'd after the owner-table complaints, blank first
+ * line included.
+ */
+const OWNER_WHY = `
+drover-check: bin/drover's owner table and libexec/ have drifted. Every file in
+libexec/ is either routed to the fork's node CLI (owner=node, with a \`run_node
+<verb>\` line) or owned by the shell file outright (owner=shell, with none). A
+new file with no row is a verb nobody decided about; a node row with no
+run_node is a verb the flip forgot to route.
+`;
+
+/**
+ * bin/drover's owner table, its dispatch arms and its run_node call sites
+ * (DROVE-315 wave 4).
+ *
+ * THE NODE CHECKER WAS MISSING THIS ENTIRELY, which is worse than it sounds:
+ * `check` is owner=node, so a hand-typed `drover check` ran the arm that only
+ * read headers and then said "headers clean" — while the shell file it
+ * replaced had grown a second sweep, and its own --help still advertised it.
+ * `make lint` calls libexec/drover-check by path so CI never lost the guard,
+ * but the verb Clay types did, and a guard you can silence by typing the verb
+ * is not a guard. This is the transliteration of that awk.
+ *
+ * The shell's parse, rule for rule: the table opens at a line that is exactly
+ * \`drover_owner() {\` and closes at a line that is exactly \`}\`; inside it, an
+ * \`owner=\` line assigns its value to every verb name banked since the last
+ * one; \`case\`, \`esac\` and \`;;\` lines are skipped; any other line has its
+ * backslashes, parens and pipes turned to spaces and every word shaped like a
+ * verb is banked. Outside the table a line that is exactly \`<verb>)\` is a
+ * dispatch arm — the table's own patterns are indented, so they cannot be
+ * mistaken for one — and a \`run_node <verb> \` line anywhere is a routed verb.
+ *
+ * ONE DELIBERATE DIVERGENCE, and it is about ORDER, not about what is found.
+ * awk's \`for (v in array)\` has no defined order, so a tree with several drifts
+ * printed them in whatever order that awk's hash produced. This sorts, so the
+ * report is stable run to run. The SET of complaints is identical, and the
+ * differential test compares the two as sets for exactly this reason.
+ */
+export interface OwnerTable {
+    /** Present only when bin/drover actually carries a table. */
+    hasTable: boolean;
+    /** verb -> "node" | "shell" (or whatever the file said). */
+    owner: Map<string, string>;
+    /** Verbs some line calls `run_node <verb>` for. */
+    routed: Set<string>;
+    /** Verbs with a `<verb>)` dispatch arm at column 0. */
+    armed: Set<string>;
+}
+
+const OWNER_OPEN = /^drover_owner\(\) \{$/;
+const OWNER_CLOSE = /^\}$/;
+const OWNER_ASSIGN = /^[ \t\v\f\r]*owner=/;
+const OWNER_NOISE = /^[ \t\v\f\r]*(case|esac|;;)/;
+const OWNER_ARM = /^[a-z][a-z0-9-]*\)$/;
+const OWNER_ROUTED = /^[ \t\v\f\r]*run_node[ \t\v\f\r]+[a-z][a-z0-9-]*[ \t\v\f\r]/;
+const VERB_WORD = /^[a-z][a-z0-9-]*$/;
+
+/** Parse bin/drover's text. Pure, so a fixture can hand in a table. */
+export function parseOwnerTable(text: string): OwnerTable {
+    const owner = new Map<string, string>();
+    const routed = new Set<string>();
+    const armed = new Set<string>();
+    let hasTable = false;
+    let inTable = false;
+    let pending: string[] = [];
+
+    for (const line of text.split('\n')) {
+        // The call sites are read whether or not the table is open, exactly as
+        // the awk's unguarded rule did. The function DEFINITION names no verb,
+        // so it does not match.
+        if (OWNER_ROUTED.test(line)) {
+            const words = line.split(/[ \t\v\f\r]+/);
+            const at = words.indexOf('run_node');
+            if (at >= 0 && words[at + 1] !== undefined) routed.add(words[at + 1]);
+        }
+        if (!inTable && OWNER_OPEN.test(line)) {
+            hasTable = true;
+            inTable = true;
+            continue;
+        }
+        if (inTable && OWNER_CLOSE.test(line)) {
+            inTable = false;
+            continue;
+        }
+        if (!inTable) {
+            if (OWNER_ARM.test(line)) armed.add(line.slice(0, -1));
+            continue;
+        }
+        const assign = line.match(OWNER_ASSIGN);
+        if (assign) {
+            const value = line.slice(assign[0].length);
+            if (value !== '') for (const v of pending) owner.set(v, value);
+            pending = [];
+            continue;
+        }
+        if (OWNER_NOISE.test(line)) continue;
+        for (const word of line.replace(/[\\)|]/g, ' ').split(/[ \t\v\f\r]+/)) {
+            if (VERB_WORD.test(word)) pending.push(word);
+        }
+    }
+    return { hasTable, owner, routed, armed };
+}
+
+/** The verbs libexec/ actually holds: `drover-<verb>`, regular files only. */
+export function libexecVerbs(root: string): Set<string> {
+    const out = new Set<string>();
+    for (const path of globFiles(join(root, 'libexec'))) {
+        const base = path.slice(path.lastIndexOf('/') + 1);
+        if (base.startsWith('drover-')) out.add(base.slice('drover-'.length));
+    }
+    return out;
+}
+
+/** Every complaint, sorted. Empty when the table and the tree agree. */
+export function ownerComplaints(table: OwnerTable, onDisk: Set<string>): string[] {
+    const out: string[] = [];
+    for (const v of [...onDisk].sort()) {
+        if (!table.owner.has(v)) out.push(`libexec/drover-${v} has no row in bin/drover drover_owner()`);
+    }
+    for (const v of [...table.owner.keys()].sort()) {
+        const owner = table.owner.get(v);
+        if (!onDisk.has(v)) out.push(`drover_owner() names ${v}, but libexec/drover-${v} is gone`);
+        if (owner === 'node' && !table.routed.has(v)) {
+            out.push(`${v} is owned by node but nothing calls run_node ${v} — it is not routed`);
+        }
+        if (owner === 'shell' && table.routed.has(v)) {
+            out.push(`${v} is owned by shell but bin/drover calls run_node ${v}`);
+        }
+        if (owner === 'shell' && !table.armed.has(v)) {
+            out.push(`${v} is owned by shell but bin/drover has no ${v}) arm — it falls through to the fork CLI`);
+        }
+    }
+    return out;
+}
+
+/**
+ * The sweep over a real tree. No bin/drover, or one with no table in it — a
+ * throwaway tree in the bats suite holds exactly that — has nothing to be
+ * consistent with, and says nothing.
+ */
+export function ownerDrift(root: string): string[] {
+    const drover = join(root, 'bin', 'drover');
+    if (!isRegularFile(drover)) return [];
+    let text: string;
+    try {
+        text = readFileSync(drover, 'utf8');
+    } catch {
+        return [];
+    }
+    const table = parseOwnerTable(text);
+    if (!table.hasTable) return [];
+    return ownerComplaints(table, libexecVerbs(root));
+}
 
 // POSIX [[:space:]], spelled out rather than reached for as \s: JS's \s also
 // matches the unicode spaces and U+FEFF, and a checker that disagrees with the
@@ -328,6 +487,20 @@ export async function run(args: string[], opts: CheckOptions = {}): Promise<numb
         process.stderr.write(WHY);
         return 1;
     }
+
+    // The owner table, on a full run only. Named files mean the run is about
+    // THOSE files, and -q is the CLI start path, which must never pay for it.
+    if (named === null && !quiet) {
+        const env = opts.env ?? process.env;
+        const root = droverEnv(env, opts.home ?? homedir()).droverDir;
+        const drift = ownerDrift(root);
+        if (drift.length > 0) {
+            for (const line of drift) process.stderr.write(`drover-check: ${line}\n`);
+            process.stderr.write(OWNER_WHY);
+            return 1;
+        }
+    }
+
     if (!quiet) process.stdout.write('drover check: headers clean\n');
     return 0;
 }

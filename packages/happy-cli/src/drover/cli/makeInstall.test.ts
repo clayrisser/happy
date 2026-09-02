@@ -211,9 +211,25 @@ describe('plists', () => {
             expect(readFileSync(plist(s), 'utf8')).not.toContain('__');
         }
         expect(readFileSync(plist('bus'), 'utf8')).toContain(`<string>${labelPrefix}.bus</string>`);
-        // The daemon gets its OWN template: the shared one runs `drover
-        // <name>`, the daemon runs the wrapper that ADOPTS a running daemon.
-        expect(readFileSync(plist('daemon'), 'utf8')).toContain(`${droverDir}/libexec/drover-daemon`);
+        // EVERY unit runs the VERB now, the daemon included (DROVE-315). It
+        // used to name libexec/drover-daemon by PATH, because bin/drover had no
+        // `daemon)` case and the word fell through to the fork CLI's own daemon
+        // subcommand — which cannot adopt a running daemon: it exits 0, and
+        // KeepAlive restarts on any exit, so the unit crash-looped wearing a
+        // success code. With the arm in place `drover daemon` reaches the
+        // wrapper that ADOPTS, so the daemon runs the same two-word command
+        // every other service does.
+        const daemonPlist = readFileSync(plist('daemon'), 'utf8');
+        expect(daemonPlist).toContain(`${droverDir}/bin/drover`);
+        expect(daemonPlist).toContain('<string>daemon</string>');
+        // Named in the template's PROSE, which explains the rewiring, but no
+        // longer in what launchd runs.
+        expect(daemonPlist).not.toContain(`<string>${droverDir}/libexec/drover-daemon</string>`);
+        // It still has its OWN template, and this is what for: the shared one
+        // asks launchd for the Interactive band (BASED-116), and the daemon
+        // does not.
+        expect(readFileSync(plist('bus'), 'utf8')).toContain('<key>ProcessType</key>');
+        expect(daemonPlist).not.toContain('<key>ProcessType</key>');
         expect(readFileSync(plist('bus'), 'utf8')).toContain(`${droverDir}/bin/drover`);
     });
 

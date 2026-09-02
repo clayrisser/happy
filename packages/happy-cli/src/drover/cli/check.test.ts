@@ -552,6 +552,117 @@ describe.skipIf(!haveTree || !existsSync(shellVerb))('drover check — prints wh
         }
     });
 
+    /**
+     * THE OWNER SWEEP, which the node arm did not have until DROVE-315 wave 4.
+     *
+     * `check` is owner=node, so a hand-typed `drover check` ran an arm that
+     * read headers and said "headers clean" while the shell file it replaced
+     * had grown a second sweep — and the node arm's own --help still advertised
+     * it. `make lint` calls libexec/drover-check by path, so CI never lost the
+     * guard; the verb Clay types did.
+     *
+     * Each case drifts ONE thing, so the report is a single line and the
+     * comparison can be byte for byte. The multi-drift case is compared as a
+     * SET, because awk's `for (v in array)` has no defined order and the node
+     * arm deliberately sorts.
+     */
+    it('agrees on the owner table, one drift at a time', async () => {
+        const tree = realpathSync(fakeTree());
+        const treeVerb = join(tree, 'libexec', 'drover-check');
+        const drover = join(tree, 'bin', 'drover');
+        const pristine = readFileSync(drover, 'utf8');
+
+        const drifts: { name: string; apply: () => void }[] = [
+            {
+                name: 'a libexec file with no row at all',
+                apply: () => writeFileSync(join(tree, 'libexec', 'drover-zzz'), '#!/bin/sh\nexit 0\n', { mode: 0o755 }),
+            },
+            {
+                name: 'a row whose libexec file is gone',
+                apply: () => rmSync(join(tree, 'libexec', 'drover-mcps')),
+            },
+            {
+                name: 'a node-owned verb nothing routes',
+                apply: () => writeFileSync(drover, pristine.split('\n')
+                    .filter((l) => l.trim() !== 'run_node mcps "$@" || :')
+                    .join('\n')),
+            },
+            {
+                name: 'a shell-owned verb that IS routed',
+                apply: () => writeFileSync(drover, pristine.replace(
+                    '\trun "$libexec/drover-settings" "$@"',
+                    '\trun_node settings "$@" || :\n\trun "$libexec/drover-settings" "$@"',
+                )),
+            },
+        ];
+
+        for (const { name, apply } of drifts) {
+            writeFileSync(drover, pristine, { mode: 0o755 });
+            apply();
+            const s = shell(treeVerb, []);
+            const n = await capture([], treeEnv(tree));
+            expect(n.code, name).toBe(1);
+            expect(n.code, name).toBe(s.code);
+            expect(n.out, name).toBe(s.out);
+            expect(n.err, name).toBe(s.err);
+            // Not two empty complaints: the explanation block is really there.
+            expect(n.err, name).toContain("bin/drover's owner table and libexec/ have drifted");
+            // Put the tree back for the next case.
+            writeFileSync(drover, pristine, { mode: 0o755 });
+            rmSync(join(tree, 'libexec', 'drover-zzz'), { force: true });
+            if (!existsSync(join(tree, 'libexec', 'drover-mcps'))) {
+                writeFileSync(
+                    join(tree, 'libexec', 'drover-mcps'),
+                    readFileSync(join(realRoot, 'libexec', 'drover-mcps')),
+                    { mode: 0o755 },
+                );
+            }
+        }
+    });
+
+    it('finds the same SET of drifts when there are several, whatever the order', async () => {
+        const tree = realpathSync(fakeTree());
+        const treeVerb = join(tree, 'libexec', 'drover-check');
+        const drover = join(tree, 'bin', 'drover');
+        writeFileSync(join(tree, 'libexec', 'drover-zzz'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+        writeFileSync(join(tree, 'libexec', 'drover-yyy'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+        writeFileSync(drover, readFileSync(drover, 'utf8').split('\n')
+            .filter((l) => l.trim() !== 'run_node mcps "$@" || :')
+            .join('\n'), { mode: 0o755 });
+
+        const s = shell(treeVerb, []);
+        const n = await capture([], treeEnv(tree));
+        expect(n.code).toBe(1);
+        expect(n.code).toBe(s.code);
+        const lines = (text: string): string[] => text.split('\n').filter((l) => l.startsWith('drover-check: ')).sort();
+        expect(lines(n.err)).toEqual(lines(s.err));
+        // Not an empty agreement: all three planted drifts are named.
+        expect(lines(n.err).join('\n')).toContain('libexec/drover-zzz has no row');
+        expect(lines(n.err).join('\n')).toContain('libexec/drover-yyy has no row');
+        expect(lines(n.err).join('\n')).toContain('nothing calls run_node mcps');
+        // And the explanation block, byte for byte, is the same paragraph.
+        const why = (text: string): string => text.split('\n').filter((l) => !l.startsWith('drover-check: ')).join('\n');
+        expect(why(n.err)).toBe(why(s.err));
+    });
+
+    it('the sweep is skipped for named files and under -q, exactly as the shell skips it', async () => {
+        const tree = realpathSync(fakeTree());
+        const treeVerb = join(tree, 'libexec', 'drover-check');
+        // A drift the full run WOULD catch...
+        writeFileSync(join(tree, 'libexec', 'drover-zzz'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+        expect((await capture([], treeEnv(tree))).code).toBe(1);
+        // ...and neither of the two exempt shapes pays for it. -q is the CLI
+        // start path (DROVE-314); a named file means the run is about that file.
+        for (const args of [['-q'], [join(tree, 'libexec', 'drover-zzz')]]) {
+            const s = shell(treeVerb, args);
+            const n = await capture(args, treeEnv(tree));
+            expect(n.code, args.join(' ')).toBe(0);
+            expect(n.code, args.join(' ')).toBe(s.code);
+            expect(n.out, args.join(' ')).toBe(s.out);
+            expect(n.err, args.join(' ')).toBe(s.err);
+        }
+    });
+
     it('a file it cannot open fails the same way, and names the file it could not read', async () => {
         // The one place the two differ by a word: awk said `awk: can't open
         // file X` because awk is what opened it. There is no awk here, so the
