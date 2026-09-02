@@ -5,6 +5,7 @@ import { join } from 'path';
 import { findAgyBin } from '@/agy/constants';
 import { findCursorBin } from '@/cursor/cursorBin';
 import { findCodexBin } from '@/codex/codexBin';
+import { findGeminiBin } from '@/gemini/geminiBin';
 import { findPiBin } from '@/pi/piBin';
 
 export interface CLIAvailability {
@@ -49,7 +50,12 @@ function detectPosix(): CLIAvailability {
   // "not installed" on a machine that runs Codex every day — and the app's
   // picker then hides the harness entirely (DROVE-273).
   const codex = findCodexBin() !== undefined;
-  const gemini = commandExists('gemini');
+  // NOT commandExists (DROVE-381): `npm install -g @google/gemini-cli` is the
+  // only way gemini arrives, and the npm global prefix is per node version — an
+  // asdf or nvm directory no daemon PATH names, or /opt/homebrew/bin under a
+  // brew node. A bare probe reports the harness uninstalled on a machine that
+  // runs it every day, and the app's picker then hides the row entirely.
+  const gemini = findGeminiBin() !== undefined;
   const agy = findAgyBin() !== undefined;
   // NOT commandExists: the installer puts cursor-agent in ~/.local/bin, which
   // is not on the daemon's PATH, so a bare probe reports "not installed" on a
@@ -82,10 +88,10 @@ function detectWindows(): CLIAvailability {
 
   const claude = checkCommand('claude');
   const codex = findCodexBin() !== undefined;
-  const gemini = checkCommand('gemini');
+  // Same resolver as POSIX, which already knows the Windows wrapper names.
+  const gemini = findGeminiBin() !== undefined;
   const agy = findAgyBin() !== undefined;
   const cursor = findCursorBin() !== undefined;
-  // Same resolver as POSIX, which already knows the Windows wrapper names.
   const pi = findPiBin() !== undefined;
 
   // OpenClaw: check command, config file, or env var
