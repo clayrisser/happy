@@ -1,89 +1,48 @@
-import * as React from 'react';
-import { StyleSheet, View } from 'react-native';
-import { Button, ContextMenu, Host, RNHostView } from '@expo/ui/swift-ui';
-import * as Clipboard from 'expo-clipboard';
-import { useRouter } from 'expo-router';
-import { storeTempText } from '@/sync/persistence';
-import { t } from '@/text';
-import type { LongPressCopyableProps } from './LongPressCopyable';
-
-const iosSymbol = (name: string) =>
-    name as unknown as React.ComponentProps<typeof Button>['systemImage'];
-
 /**
- * The real UIKit context menu, not a menu we draw. UIContextMenuInteraction
- * anchors it at the finger, lifts and blurs the pressed view, plays the system
- * haptic and dismisses the way every other iOS menu does. None of that is ours
- * to position, so there is no anchor measurement here at all.
+ * iOS is back on the anchored menu, and this time the device check is in.
  *
- * The `measured` host of Rule 3 in `nativeControls.ts`, and the reason this
- * file was parked for a day. A bare React Native child of a `Host` is wrapped
- * in a `UIViewRepresentable` with no `sizeThatFits` and no bounds observer, so
- * `matchContents` was never measuring the body — it was measuring a SwiftUI
- * tree the body contributed nothing to, and a long markdown message rendered
- * clipped mid-sentence. `RNHostView` KVOs the child's `bounds` and applies it
- * as a SwiftUI `.frame`, which closes the loop back to `setStyleSize` and a
- * dirtied Yoga node, so an async markdown reflow propagates instead of
- * freezing a stale height.
+ * DROVE-154 parked the SwiftUI ContextMenu, then un-parked it on `RNHostView`
+ * (4c80ad77, 02:49) on the theory that a bare RN child of a `Host` was the
+ * whole of the problem: it contributes nothing to `matchContents`, gets no
+ * touch handler, and `RNHostView` closes both by KVOing the child's `bounds`
+ * into a SwiftUI `.frame`. The theory is right about the mechanism. It is
+ * wrong that the mechanism is enough, and the ticket said so itself — device
+ * check 1, "the height under reflow, not at rest", was written down as owed.
  *
- * It also attaches the `RCTSurfaceTouchHandler` a bare child never gets. That
- * was the second, quieter failure of the parked file: every link and tool card
- * inside a message was inert, which nobody reported because a clipped message
- * is louder than a dead one.
+ * IT FAILED, at 10:24 the same morning (DROVE-373). Clay: "What's up with the
+ * alignment of the speech things? You can see how they're overlapping, it's
+ * all funky." Two screenshots on the ticket: a drover reply cut across the
+ * middle of a line with the next message drawn inside the same band, and a
+ * user bubble sitting on top of "wave 4 is porting those now". The failure the
+ * file was parked for the first time, plus the half nobody had photographed
+ * yet — the NEXT row, which starts wherever the short measurement said this
+ * one ended.
+ *
+ * WHY THE OVERLAP IS THE SAME BUG AS THE CLIP. `matchContents={{vertical}}`
+ * makes the row's Yoga height a value written back from a native measurement
+ * rather than a value Yoga computed. When the measurement is short the row's
+ * FRAME ends before its CONTENT does, so two things happen at once and only
+ * one of them was in the original screenshot: the content is cut at the frame,
+ * and the sibling below starts at the frame. A markdown body that reflows
+ * after the first pass — a code fence, an image, a table — is exactly the case
+ * that leaves the frame behind, and it is the case the transcript is made of.
+ *
+ * So the height of a message goes back to Yoga, which is the one thing in this
+ * app that knows it. Reading the transcript beats the menu being native; that
+ * was the ruling when this was parked the first time and nothing about it has
+ * changed. The SwiftUI file is kept verbatim at `LongPressCopyable.ios.tsx.native`.
+ *
+ * WHAT WOULD ACTUALLY FIX IT is written in `nativeControls.ts` under the
+ * verdict, and it is not a third go at `measured`: it is Rule 3's `overlay`,
+ * a `Host` at `absoluteFillObject` over RN content that sizes itself, because
+ * that mode has no measurement in it anywhere. Its cost is a transparent
+ * SwiftUI trigger sitting over the row, which is a live question for the links
+ * and tool cards inside a message and therefore a product call rather than a
+ * mechanical one.
+ *
+ * The anchored menu lives in the .android file; this is the same component,
+ * not an iOS-specific one, so it is re-exported rather than copied. It puts no
+ * host in the tree, so a message row is laid out by Yoga and touches inside it
+ * are ordinary RN touches.
  */
-export function LongPressCopyable(props: LongPressCopyableProps) {
-    const router = useRouter();
-    const { text } = props;
-
-    const copy = React.useCallback(() => {
-        Clipboard.setStringAsync(text).catch((error) => {
-            console.error('Failed to copy message:', error);
-        });
-    }, [text]);
-
-    // The reader the markdown long press used to open. It has nowhere else to
-    // be reached from a message now that the hold raises this menu.
-    const selectText = React.useCallback(() => {
-        try {
-            router.push(`/text-selection?textId=${storeTempText(text)}`);
-        } catch (error) {
-            console.error('Error storing text for selection:', error);
-        }
-    }, [router, text]);
-
-    return (
-        // Vertical only, on every message. A bare `matchContents` matches
-        // horizontally too, which pins the host's style width from content
-        // whose width comes down from that same node, and the loop collapses to
-        // zero. `stretch` is what gives the host a real width to lay the body
-        // out against; the bubble hugs its own content INSIDE the host.
-        <Host matchContents={{ vertical: true }} style={styles.host}>
-            <ContextMenu>
-                <ContextMenu.Items>
-                    <Button label={t('common.copy')} onPress={copy} systemImage={iosSymbol('doc.on.doc')} />
-                    <Button label={t('textSelection.title')} onPress={selectText} systemImage={iosSymbol('selection.pin.in.out')} />
-                </ContextMenu.Items>
-                {/* No ContextMenu.Preview: without one iOS lifts the pressed
-                    view itself, which is the preview Clay is asking for. */}
-                <ContextMenu.Trigger>
-                    {/* One child, always. `RNHostView` frames the SwiftUI view
-                        to its FIRST child's bounds, so a caller passing two
-                        siblings — a goal bubble and its "sent as goal" row —
-                        would measure the bubble and clip the row. The caller's
-                        style rides on this wrapper, which is where the fill
-                        versus hug decision belongs now that the host stretches
-                        unconditionally. */}
-                    <RNHostView matchContents>
-                        <View style={props.style}>{props.children}</View>
-                    </RNHostView>
-                </ContextMenu.Trigger>
-            </ContextMenu>
-        </Host>
-    );
-}
-
-const styles = StyleSheet.create({
-    host: {
-        alignSelf: 'stretch',
-    },
-});
+export { LongPressCopyable } from './LongPressCopyable.android';

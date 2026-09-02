@@ -142,20 +142,26 @@ const MESSAGE = 'the exact text the pill used to copy';
 
 describe('LongPressCopyable on iOS', () => {
     /**
-     * iOS is on the real UIKit context menu (DROVE-154, un-parked).
+     * iOS is on the anchored menu again (DROVE-373), and these assertions are
+     * the retarget of the ones that guarded the SwiftUI shape.
      *
-     * It was parked for a day on a `bare` Host: a plain RN child of a `Host`
-     * is wrapped in a `UIViewRepresentable` with no `sizeThatFits` and no
-     * bounds observer, so `matchContents` was never measuring the body at all
-     * and a long markdown message rendered CLIPPED mid-sentence. `RNHostView`
-     * KVOs the child's bounds into a SwiftUI frame, which closes the loop back
-     * to Yoga, and attaches the `RCTSurfaceTouchHandler` the bare child never
-     * got — the second, quieter failure, where every link and tool card inside
-     * a message was inert.
+     * DROVE-154 un-parked the real UIKit context menu on `RNHostView`, which
+     * genuinely closes the measurement loop the parked file was missing. What
+     * it does not do is make the loop synchronous, and a Yoga column does not
+     * wait: the sibling below a `matchContents` host is placed at whatever
+     * height the host reported on the pass that placed it. A markdown body
+     * that reflows after its first pass leaves the frame behind, and then the
+     * body is cut at the frame AND the next message starts inside it. Clay
+     * photographed both eight hours later.
      *
-     * Neither of those is observable from a unit test: both are UIKit. What is
-     * observable is the SHAPE that makes them work, so that is what these
-     * assert. The device re-test is owed on the ticket, not here.
+     * So what these assert is the property, not the shape: iOS puts NO host on
+     * a message row, and the row's height is Yoga's. That is a stronger
+     * statement than the ones it replaces — those pinned a particular correct
+     * SwiftUI arrangement, this bans the whole class of arrangement — so the
+     * SwiftUI expectations are not weakened here, they are moved to the file
+     * that still holds them: `nativeControls.test.ts` asserts the mode is gone
+     * from every host site, and `transcriptRowFrames.spec.ts` measures what a
+     * row pinned to a short height does to the rows around it.
      */
     function renderIos(style?: unknown): ReactTestRenderer {
         return render(React.createElement(IosCopyable, {
@@ -165,79 +171,54 @@ describe('LongPressCopyable on iOS', () => {
         } as any));
     }
 
-    it('wraps the trigger child in RNHostView, which is what measures it and gives it touches', () => {
+    it('puts no SwiftUI host on a message row, so Yoga owns its height', () => {
+        // The whole ticket in one assertion. A `Host` here writes the row's
+        // height back from a native measurement; every other symptom followed
+        // from that.
         const renderer = renderIos();
-        const trigger = renderer.root.findByType('ExpoContextMenuTrigger' as any);
-        const hosted = trigger.findAllByType('ExpoRNHostView' as any);
-        expect(hosted).toHaveLength(1);
-        expect(hosted[0].props.matchContents).toBe(true);
-        // Without this the host is `bare`, which is the mode Rule 3 bans.
-        expect(hosted[0].findAllByType('Bubble' as any)).toHaveLength(1);
+        expect(renderer.root.findAllByType('ExpoHost' as any)).toHaveLength(0);
+        expect(renderer.root.findAllByType('ExpoRNHostView' as any)).toHaveLength(0);
+        expect(renderer.root.findAllByType('ExpoContextMenu' as any)).toHaveLength(0);
     });
 
-    it('puts exactly one child under the trigger, and one under RNHostView', () => {
-        // `RNHostViewProps.children` is a single `ReactElement`, and the native
-        // view frames the SwiftUI view to that child's bounds. Two siblings —
-        // a goal bubble and its "sent as goal" row — would measure the first
-        // and clip the second, so the wrapper View is load-bearing.
-        const renderer = renderIos();
-        const trigger = renderer.root.findByType('ExpoContextMenuTrigger' as any);
-        expect(React.Children.count(trigger.props.children)).toBe(1);
-        const hosted = renderer.root.findByType('ExpoRNHostView' as any);
-        expect(React.Children.count(hosted.props.children)).toBe(1);
+    it('is the same component Android runs, not a second implementation', () => {
+        // Re-exported rather than copied, which is what stopped the two from
+        // drifting the last time this was parked.
+        expect(IosCopyable).toBe(AndroidCopyable);
     });
 
-    it('uses no ContextMenu.Preview, so iOS lifts the pressed view itself', () => {
-        // A Preview would draw a SECOND, SwiftUI-only rendering of the message
-        // for the lift. Omitting it is what makes the lift show the real body.
-        expect(renderIos().root.findAllByType('ExpoContextMenuPreview' as any)).toHaveLength(0);
-    });
-
-    it('matches the host vertically only, and stretches it for a real width', () => {
-        // A bare `matchContents` matches horizontally too, which pins the
-        // host's style width from content whose width comes down from that
-        // same node: the loop collapses to zero.
-        const host = renderIos().root.findByType('ExpoHost' as any);
-        expect(host.props.matchContents).toEqual({ vertical: true });
-        expect(host.props.style).toMatchObject({ alignSelf: 'stretch' });
-    });
-
-    it('carries the caller style inside the host, which is where fill-versus-hug is decided now', () => {
-        // The `fill` prop is gone. The host stretches unconditionally and the
-        // bubble hugs its own content INSIDE it, so `style` is the only lever
-        // and it has to ride on the wrapper, not on the host.
+    it('still draws the message, and carries the caller style around it', () => {
         const style = { alignSelf: 'flex-end' };
-        const hosted = renderIos(style).root.findByType('ExpoRNHostView' as any);
-        expect(hosted.findByType('View' as any).props.style).toBe(style);
+        const renderer = renderIos(style);
+        expect(renderer.root.findByType('Bubble' as any)).toBeDefined();
+        expect(renderer.root.findAllByType('GestureDetector' as any).length).toBeGreaterThan(0);
     });
 
-    it('raises the menu natively, with no drawn menu and no long-press gesture of ours', () => {
+    it('raises the hold menu, and lists Copy first and Select Text second', () => {
         const renderer = renderIos();
-        expect(renderer.root.findAllByType('RNModal' as any)).toHaveLength(0);
-        expect(shared.longPressHandlers).toHaveLength(0);
-        expect(renderer.root.findByType('ExpoContextMenu' as any)).toBeDefined();
-    });
-
-    function menuButton(renderer: ReactTestRenderer, label: string): any {
-        return renderer.root.findAllByType('ExpoButton' as any)
-            .find((button: any) => button.props.label === label);
-    }
-
-    it('lists Copy first and Select Text second, as the drawn menu does', () => {
-        const labels = renderIos().root.findAllByType('ExpoButton' as any)
-            .map((button: any) => button.props.label);
+        expect(shared.longPressHandlers).toHaveLength(1);
+        act(() => shared.longPressHandlers[0]());
+        const labels = renderer.root.findAllByType('Pressable' as any)
+            .map((row: any) => row.props.accessibilityLabel)
+            .filter((label: unknown): label is string => typeof label === 'string');
         expect(labels).toEqual(['Copy', 'Select Text']);
     });
 
     it('still copies the same text the pill copied', async () => {
         const renderer = renderIos();
-        await act(async () => { await menuButton(renderer, 'Copy').props.onPress(); });
+        act(() => shared.longPressHandlers[0]());
+        const copyRow = renderer.root.findAllByType('Pressable' as any)
+            .find((row: any) => row.props.accessibilityLabel === 'Copy');
+        await act(async () => { await copyRow.props.onPress(); });
         expect(shared.setStringAsync).toHaveBeenCalledWith(MESSAGE);
     });
 
     it('hands the reader exactly the text Copy would have put on the clipboard', () => {
         const renderer = renderIos();
-        act(() => menuButton(renderer, 'Select Text').props.onPress());
+        act(() => shared.longPressHandlers[0]());
+        const selectRow = renderer.root.findAllByType('Pressable' as any)
+            .find((row: any) => row.props.accessibilityLabel === 'Select Text');
+        act(() => selectRow.props.onPress());
         expect(shared.push).toHaveBeenCalledWith(`/text-selection?textId=temp:${MESSAGE.length}`);
     });
 });

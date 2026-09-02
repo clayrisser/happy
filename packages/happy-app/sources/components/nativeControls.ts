@@ -99,12 +99,16 @@
  *             Never ship this. One site left in the tree, never wired up.
  *
  *   measured  `<Host matchContents={{ vertical: true }}>` with the RN children
- *             inside `<RNHostView matchContents>`. `RNHostView` is the one
- *             component in the package that KVOs the RN child's `bounds` and
- *             applies it as a SwiftUI `.frame`, which is what closes the loop
- *             back to `setStyleSize` and Yoga. It also attaches the touch
- *             handler. Shipping in `LongPressCopyable.ios.tsx`, which is the
- *             file `bare` clipped and this mode un-parked (DROVE-154).
+ *             inside `<RNHostView matchContents>`. `RNHostView` KVOs the RN
+ *             child's `bounds` into a SwiftUI `.frame`, which is what carries
+ *             a height back to `setStyleSize` and Yoga, and it attaches the
+ *             touch handler a bare child never gets. NOTHING SHIPS IT. It was
+ *             the message row for eight hours (DROVE-154) and came back out
+ *             the same morning, because a height that arrives from a native
+ *             measurement is a height Yoga did not compute: when the
+ *             measurement is short the row's frame ends before its content
+ *             does, the content is cut at the frame AND the sibling below
+ *             starts at the frame. See the verdict at the end of this file.
  *
  * Two constraints on `measured`, both load-bearing. Match only the VERTICAL
  * axis: horizontal `matchContents` pins the host's style width from its
@@ -237,8 +241,10 @@ export interface SwiftUiHostSite {
  * not here, and on an entry whose file no longer mounts one.
  *
  * The one `bare` entry is still unimported, which is the cheapest statement of
- * Rule 3 available: the mode has never once reached a screen. The file it used
- * to describe twice over now sits above it as the first `measured` site.
+ * Rule 3 available: the mode has never once reached a screen. `measured` has
+ * no entry at all now — DROVE-373 took the message row back out of it — so the
+ * two modes that ship are `overlay` and `fixed`, and both of them are frames
+ * RN already owns.
  */
 export const swiftUiHostSites: readonly SwiftUiHostSite[] = [
     {
@@ -256,17 +262,9 @@ export const swiftUiHostSites: readonly SwiftUiHostSite[] = [
         mode: 'fixed',
     },
     {
-        // The first `measured` site, and the one DROVE-154 was parked on. A
-        // `Host` matched vertically only, stretched by RN style, with the
-        // message body inside a single `RNHostView matchContents` under
-        // `ContextMenu.Trigger`.
-        source: 'components/LongPressCopyable.ios.tsx',
-        mode: 'measured',
-    },
-    {
         source: 'components/SessionActionsNativeMenu.ios.tsx',
         mode: 'bare',
-        reason: 'Written by an earlier lane and never imported by anything. The failure DROVE-154 hit is waiting in it twice over: a session row taller than the host measures would clip, and every tap target inside the row is inert for want of a touch handler. Give it `RNHostView` — the `measured` shape is now shipping one entry up — or make it an overlay before importing it.',
+        reason: 'Written by an earlier lane and never imported by anything. The failure DROVE-154 hit is waiting in it twice over: a session row taller than the host measures would clip, and every tap target inside the row is inert for want of a touch handler. Make it an `overlay` before importing it. Do NOT reach for `RNHostView`: that is the `measured` shape, it shipped on the message row for eight hours and came back out on DROVE-373, and a session row reflows for the same reasons a message does.',
     },
 ];
 
@@ -317,7 +315,6 @@ export interface SwiftUiImporter {
 }
 
 export const swiftUiImporters: readonly SwiftUiImporter[] = [
-    { source: 'components/LongPressCopyable.ios.tsx', use: 'context-menu' },
     { source: 'components/NativeSettingsMenu.ios.tsx', use: 'menu' },
     { source: 'components/NativeOptionsPicker.ios.tsx', use: 'menu' },
     { source: 'components/SessionActionsNativeMenu.ios.tsx', use: 'context-menu' },
@@ -409,9 +406,9 @@ export const controlClasses: readonly ControlClass[] = [
     },
     {
         name: 'message long press',
-        drawnBy: 'expo-ui',
+        drawnBy: 'custom',
         source: 'components/LongPressCopyable.tsx',
-        verdict: 'SwiftUI ContextMenu on iOS, in the `measured` host of Rule 3: the anchor at the finger, the lift, the haptic and system dismissal are the platform\'s. Android has no context-menu primitive (Rule 8) and keeps the hand-drawn anchored menu, so this class is expo-ui on one platform only. What it costs is two hosting layers per transcript row, still unprofiled. See the verdict below.',
+        verdict: 'The hand-drawn anchored menu on every platform, again (DROVE-373). The `measured` host of Rule 3 gave iOS the real UIKit menu for eight hours and took the transcript with it: a message row whose height comes back from a native measurement is a row whose frame can end before its content does. Both symptoms are the same arithmetic — the body cut at the frame, the next message drawn inside it. The route back is `overlay`, which has no measurement in it; see the verdict below.',
     },
     {
         name: 'sheets',
@@ -434,74 +431,66 @@ export const controlClasses: readonly ControlClass[] = [
 ];
 
 /**
- * VERDICT ON THE iOS CONTEXT MENU (DROVE-154, asked on DROVE-134).
+ * VERDICT ON THE iOS CONTEXT MENU (DROVE-154, DROVE-134, re-parked on DROVE-373).
  *
- * SHIPPED. `LongPressCopyable.ios.tsx` is the real UIKit context menu again,
- * and `LongPressCopyable.ios.tsx.native` — the copy this file told an earlier
- * lane to KEEP while the mechanism was unproven — is deleted, because the live
- * file now IS it plus the three lines it was waiting on.
+ * PARKED. `LongPressCopyable.ios.tsx` re-exports the anchored menu again and
+ * the SwiftUI file is kept verbatim beside it at
+ * `LongPressCopyable.ios.tsx.native`. This is the second park and the first
+ * one with a device result behind it, so what follows is a measurement, not a
+ * caution.
  *
- * What was actually wrong. DROVE-154 parked the file believing it was blocked
- * on the host reporting the body's real height. It was not blocked; it was
- * missing a component. Bare RN children in a `Host` contribute nothing to
- * `matchContents` (Rule 3), so `matchContents` was not measuring the body
- * short, it was measuring a SwiftUI tree the body contributed nothing to, and
- * a long markdown message rendered clipped mid-sentence. `RNHostView` KVOs the
- * RN child's `bounds`, which is what RN's `updateLayoutMetrics` writes, and
- * applies it as a SwiftUI `.frame`. That closes the loop all the way back to
- * `setStyleSize` and a dirtied Yoga node. Every hop is reactive, so an async
- * markdown reflow propagates rather than freezing a stale height.
+ * WHAT DROVE-154 GOT RIGHT. A bare RN child of a `Host` really does contribute
+ * nothing to `matchContents` (Rule 3) and really does get no touch handler,
+ * and `RNHostView` really does close both: it KVOs the child's `bounds` —
+ * which is what RN's `updateLayoutMetrics` writes — into a SwiftUI `.frame`,
+ * back to `setStyleSize` and a dirtied Yoga node, and it attaches the
+ * `RCTSurfaceTouchHandler`. None of that is wrong and none of it is undone
+ * here. The shape it shipped was the correct shape for the mode.
  *
- * The shape that shipped, against the file as parked:
+ * WHAT IT GOT WRONG is that the mode is the wrong mode for a MESSAGE, and the
+ * ticket named the check that would show it: "the height under reflow, not at
+ * rest", owed on device. Eight hours later, DROVE-373: "What's up with the
+ * alignment of the speech things? You can see how they're overlapping, it's
+ * all funky." A drover reply cut across the middle of a line with the next
+ * message drawn inside the same band, and a user bubble on top of "wave 4 is
+ * porting those now".
  *
- *   -  <Host matchContents={props.fill ? { vertical: true } : true} ...>
- *   +  <Host matchContents={{ vertical: true }} style={styles.host}>
- *        <ContextMenu>
- *          <ContextMenu.Items>...</ContextMenu.Items>
- *   -      <ContextMenu.Trigger>{props.children}</ContextMenu.Trigger>
- *   +      <ContextMenu.Trigger>
- *   +        <RNHostView matchContents>
- *   +          <View style={props.style}>{props.children}</View>
- *   +        </RNHostView>
- *   +      </ContextMenu.Trigger>
+ * THE ONE ARITHMETIC BEHIND BOTH SYMPTOMS, which is the part worth keeping.
+ * `matchContents` makes the row's Yoga height a value written BACK from a
+ * native measurement instead of a value Yoga computed. Every hop is reactive,
+ * so it converges — eventually. What it is not is SYNCHRONOUS, and a Yoga
+ * column does not wait: the sibling below is placed at whatever height the
+ * host reported on the pass that placed it. So a short or late measurement
+ * produces two things at once, and DROVE-154 only had a screenshot of the
+ * first:
  *
- * `matchContents` is vertical-only on every message, not just the filling one.
- * `true` matches horizontally as well, which pins the host's style width from
- * content whose width comes down from that same node, and that loop collapses
- * to zero. The host stretches unconditionally and the bubble hugs its own
- * content INSIDE it, which is why the `fill` prop is gone: the caller's
- * `style` rides on the wrapper inside the host and is the only place the
- * fill-versus-hug decision is made now.
+ *   1. the body is cut at the frame — the clip that parked it the first time;
+ *   2. the NEXT ROW starts at the frame — the overlap, which needs two
+ *      messages in the shot and so had never been photographed.
  *
- * The single `View` in that wrapper is load-bearing twice. `RNHostViewProps`
- * types `children` as one `ReactElement`, and `RNHostView` frames the SwiftUI
- * view to that child's bounds — so a caller passing two siblings (a goal
- * bubble and its "sent as goal" row) would measure the bubble and clip the
- * row.
+ * A markdown body that reflows after its first pass is exactly the case that
+ * leaves the frame behind: a code fence measuring its own font, an image
+ * resolving, a table. That is what the transcript is made of, which is why
+ * this mode is survivable on a settings row and not on a message.
  *
- * `RNHostView` also fixes a second defect nobody reported, because a clipped
- * message is louder than a dead one: a bare RN child of a `Host` gets no
- * `RCTSurfaceTouchHandler`, so every link and tool card inside a message under
- * the parked file was inert. `RNHostView` attaches one.
+ * SO: A ROW'S HEIGHT COMES FROM YOGA. Not from a native measurement, not from
+ * a cache, not from a callback. That is the rule DROVE-373 is buying, and
+ * `transcriptRowFrames.spec.ts` pins it by resolving a real message column and
+ * showing what a pinned-short row does to the two rows around it.
  *
- * OTA. `RNHostView.swift` is registered in `ExpoUIModule.swift` in the
- * installed `@expo/ui` 55.0.5, which is the version compiled into TestFlight
- * build 12, so this needed no new build.
+ * THE ROUTE BACK, if the native menu is wanted again, is `overlay` (Rule 3)
+ * and not a third go at `measured`: a `Host` at `absoluteFillObject` as a
+ * sibling of RN content inside an RN parent that sizes itself. RN owns the
+ * frame, SwiftUI owns the gesture, and there is no measurement anywhere in it,
+ * so neither symptom above is reachable. It costs the lift preview (what iOS
+ * lifts is the transparent trigger) and it puts a transparent SwiftUI view
+ * over the row, which is a live question for the links and tool cards inside a
+ * message — the second defect DROVE-154 fixed. That trade is Clay's call, not
+ * an engineering one, and it is the whole of what is left to decide.
  *
- * STILL OWED ON DEVICE, both unmeasured and neither one a unit test can reach:
- *
- *   1. The height under reflow, not at rest. The clip was on a long markdown
- *      body; re-test with code blocks and images, which lay out late, and not
- *      only with a long paragraph.
- *   2. Touch. A link and a tool card inside a message must respond to a tap.
- *      That is the failure the parked file had and nobody saw.
- *
- *   And one cost to watch rather than assert: scroll. A `Host` plus an
- *   `RNHostView` per transcript row is two hosting layers on every message,
- *   never profiled.
- *
- * If the height or the touch check fails, the fallback is `overlay` (Rule 3):
- * the menu at the finger with no measurement anywhere, at the cost of the lift
- * preview. That is a product call for Clay rather than an engineering one.
+ * The OTA note still stands and is worth keeping: `RNHostView.swift` is
+ * registered in `ExpoUIModule.swift` in the installed `@expo/ui` 55.0.5, the
+ * version compiled into TestFlight build 12. Both the un-park and this re-park
+ * ship without a build.
  */
-export const contextMenuVerdict = 'shipped' as const;
+export const contextMenuVerdict = 'parked' as const;

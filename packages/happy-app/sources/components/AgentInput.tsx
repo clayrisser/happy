@@ -93,6 +93,7 @@ import {
     micColour,
     primaryActionColour,
 } from './composerControlColour';
+import { DOCK_CONTENT_TOP_PADDING } from './agentDockLayout';
 
 interface AgentInputProps {
     // `initialValue` seeds the uncontrolled textarea once; keystrokes never
@@ -306,8 +307,10 @@ const MOBILE_ICON_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('icon');
 
 // Shared with the action-area offset reported to onActionAreaOffsetChange —
 // the Shaker's layout.y is relative to innerContainer, which sits this far
-// below AgentInput's top edge.
-const CONTAINER_TOP_PADDING = 8;
+// below AgentInput's top edge. Read from agentDockLayout, which adds it up
+// with the rest of the dock's parts for the chat list's bottom floor
+// (DROVE-373); a second literal here is a floor that silently stops matching.
+const CONTAINER_TOP_PADDING = DOCK_CONTENT_TOP_PADDING;
 
 const stylesheet = StyleSheet.create((theme, runtime) => ({
     container: {

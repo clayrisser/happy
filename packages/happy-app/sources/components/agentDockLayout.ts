@@ -28,11 +28,21 @@
  * safe area".
  */
 
+import { MOBILE_COMPOSER_METRICS, resolveMobileComposerHeight } from './agentInputLayout';
+
 /**
  * Padding AgentInput's outer container already keeps under the status row.
  * Mirrors `stylesheet.container.paddingBottom` in AgentInput.tsx.
  */
 export const DOCK_CONTENT_BOTTOM_PADDING = 8;
+
+/**
+ * The same padding at the other end. AgentInput reads it, so the two cannot
+ * drift (DROVE-373): the resting-height floor below is the sum of the dock's
+ * parts, and a part that is written down twice is a part that is eventually
+ * written down differently.
+ */
+export const DOCK_CONTENT_TOP_PADDING = 8;
 
 /**
  * The painted backdrop's ramp on Android and web, and why the number is 32
@@ -334,8 +344,63 @@ export interface DockInsetInput {
 }
 
 /**
+ * The dock's height with an empty composer, RESOLVED rather than measured.
+ *
+ * The floor under `resolveDockInset` (DROVE-373), and the reason it has to
+ * exist is a race, not an arithmetic error. The dock's height reaches the list
+ * by measurement — AgentInput's `onLayout`, `setState`, an effect,
+ * `onDockInsetChange`, another `setState`, then the list's `paddingTop` — and
+ * the state it starts in is ZERO. So on the first paint of a chat, and again
+ * for a frame whenever the measurement is late, the inverted list reserves
+ * nothing at its visual bottom and the newest message is drawn under the
+ * composer. That is the second half of Clay's "they're overlapping": one
+ * overlap is between two messages (the context-menu host, see
+ * `nativeControls.ts`), the other is between the last message and the glass.
+ *
+ * The composer has known its own height from the VALUE since DROVE-350, so the
+ * numbers to resolve it with are all here. This is the dock's parts, added up,
+ * for a composer holding nothing:
+ *
+ *   8    AgentInput's container top padding
+ *   ...  the composer block: the bubble at its one-line floor, the control row
+ *        inside it, and the 8pt gap under the card
+ *   20   the DROVE-82 status strip
+ *   8    AgentInput's container bottom padding
+ *
+ * It is a FLOOR and never a replacement. A composer holding three lines, an
+ * attachment strip or a recording banner is taller than this and the
+ * measurement is the only thing that knows by how much.
+ */
+export function resolveRestingDockHeight(): number {
+    return DOCK_CONTENT_TOP_PADDING
+        + resolveMobileComposerHeight(MOBILE_COMPOSER_METRICS.inputLineHeight)
+        + STATUS_ROW_ROW_HEIGHT
+        + DOCK_CONTENT_BOTTOM_PADDING;
+}
+
+/**
+ * The dock's height as everything downstream should read it: the measurement,
+ * floored at the resting height.
+ *
+ * Applied where the measurement is TAKEN, not in each resolver that consumes
+ * it, and that is the load-bearing half (DROVE-373). Four things are derived
+ * from this one number — the list's bottom inset, the transcript mask, the
+ * bottom scrim and the empty-state's bottom edge — and every one of them is
+ * asserted equal to the others. Flooring inside `resolveDockInset` alone would
+ * have made the band the list reserves and the band the scrim paints disagree
+ * by up to the whole composer, which is a worse defect than the one being
+ * fixed and would have shipped looking like a fix.
+ */
+export function resolveMeasuredDockHeight(measured: number): number {
+    return Math.max(measured, resolveRestingDockHeight());
+}
+
+/**
  * What the chat list reserves at its visual bottom: the dock's real height
  * from the screen edge up, which is the measured box plus the gap under it.
+ *
+ * Stays pure arithmetic on whatever height it is handed. The floor is
+ * `resolveMeasuredDockHeight`'s job, one level up.
  */
 export function resolveDockInset({
     dockHeight,
