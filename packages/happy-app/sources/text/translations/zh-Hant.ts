@@ -551,9 +551,9 @@ export const zhHant: TranslationStructure = {
             readReplies: '朗讀回覆',
             readRepliesSubtitle: '每則助理回覆抵達時朗讀。程式碼、差異與工具輸出會略過。',
             phoneHaptics: '手機觸感',
-            phoneHapticsSubtitle: '讓這台手機震動：抵達的提示，以及指下的輕觸回饋。關閉時手錶照常震動，手機保持安靜。',
+            phoneHapticsSubtitle: '提示，以及指下的輕觸回饋',
             phoneHapticsTitle: '這台手機',
-            phoneHapticsFooter: '手腕才是用來提醒你的那一面。手機是你看和聽的那一面，朗讀回覆時它就在口袋裡，所以預設保持安靜。一個開關管兩種：工作階段提醒和觸碰回饋。開啟它不影響手錶，關閉它也不會從手錶拿走什麼。',
+            phoneHapticsFooter: '預設關閉。手錶照常震動。',
         },
         codexPermissionMode: {
             title: 'CODEX 權限模式',

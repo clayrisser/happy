@@ -567,9 +567,9 @@ export const pl: TranslationStructure = {
             readReplies: 'Czytaj odpowiedzi na głos',
             readRepliesSubtitle: 'Wypowiada każdą odpowiedź, gdy nadejdzie. Kod, diffy i wyniki narzędzi są pomijane.',
             phoneHaptics: 'Wibracje telefonu',
-            phoneHapticsSubtitle: 'Pozwól temu telefonowi wibrować: nadchodzące pytania i drobne stuknięcia pod palcem. Wyłączone, zegarek nadal wibruje, a telefon milczy.',
+            phoneHapticsSubtitle: 'Powiadomienia i stuknięcia pod palcem',
             phoneHapticsTitle: 'TEN TELEFON',
-            phoneHapticsFooter: 'Nadgarstek jest powierzchnią, która ma cię trącić. Telefon jest tym, na który patrzysz i którego słuchasz, a leży w kieszeni, gdy czytana jest odpowiedź, więc domyślnie milczy. Jeden przełącznik na oba rodzaje: powiadomienia sesji i odzew pod palcem. Włączenie nie zmienia nic w zegarku, a wyłączenie nic mu nie zabiera.',
+            phoneHapticsFooter: 'Domyślnie wyłączone. Zegarek wibruje nadal.',
         },
         codexPermissionMode: {
             title: 'TRYB UPRAWNIEŃ CODEX',

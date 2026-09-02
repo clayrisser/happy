@@ -566,9 +566,9 @@ export const en: TranslationStructure = {
             readReplies: 'Read replies aloud',
             readRepliesSubtitle: 'Speaks each assistant reply as it arrives. Code, diffs and tool output are skipped.',
             phoneHaptics: 'Phone haptics',
-            phoneHapticsSubtitle: 'Let this handset buzz: prompts arriving, and the small taps under your finger. Off, the watch still buzzes and the phone stays still.',
+            phoneHapticsSubtitle: 'Prompts and the taps under your finger',
             phoneHapticsTitle: 'THIS PHONE',
-            phoneHapticsFooter: 'The wrist is the surface meant to tap you. The phone is the one you look at and hear, and it is in a pocket while a reply is read aloud, so it ships silent. One switch, both kinds: session announcements and touch feedback. Turning it on does nothing to the watch, and turning it off takes nothing from the watch.',
+            phoneHapticsFooter: 'Off by default. The watch buzzes either way.',
         },
         codexPermissionMode: {
             title: 'CODEX PERMISSION MODE',

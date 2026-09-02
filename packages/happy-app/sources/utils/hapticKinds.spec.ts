@@ -103,3 +103,57 @@ describe('every haptic call site is classified', () => {
         }
     });
 });
+
+/**
+ * THE ANSWER PATH (DROVE-190).
+ *
+ * `drover status` prints the two halves separately — `announce visual,haptic
+ * · answer visual` — and the announce half is covered above. The answer half
+ * is the one Clay's phone is in his hand for: the gate card, the banner, the
+ * notification action he taps from the lock screen.
+ *
+ * Haptic is announce-only in the channel model, so there is no answer-side
+ * BUZZ to gate. What there is, is the interaction tap under the finger that
+ * answers a gate, and that rides the same switch as everything else because
+ * the answer route reaches the taptic engine only through components/haptics
+ * — never expo-haptics, and never a helper of its own. Asserted here rather
+ * than assumed, because a confirmation buzz on "Allow" is the single most
+ * likely thing for someone to add next, and it would fire in his pocket the
+ * moment a notification action ran headless.
+ */
+describe('the answer path is gated too', () => {
+    const answerRoute = [
+        'sources/sync/droverNotificationAnswer.ts',
+        'sources/sync/droverNotificationActions.ts',
+        'sources/components/sessionGateAction.ts',
+        'sources/components/SessionGateOverlay.tsx',
+        'sources/components/PendingGatesBanner.tsx',
+    ];
+
+    it('no file on the answer route reaches the taptic engine directly', () => {
+        for (const file of answerRoute) {
+            expect(source(file), file).not.toContain('expo-haptics');
+        }
+    });
+
+    it('and none of them is an unclassified call site', () => {
+        // Anything on this route that starts firing haptics has to join the
+        // catalogue, which is what makes it answer to the switch.
+        const catalogued = new Set(HAPTIC_CALL_SITES.map((s) => s.file));
+        for (const file of answerRoute) {
+            const fires = /\bhaptics(?:Light|Error|Selection|Confirm|Announce)\s*\(/.test(source(file));
+            expect(fires && !catalogued.has(file), `${file} fires an uncatalogued haptic`).toBe(false);
+        }
+    });
+
+    it('haptic stays announce-only in the channel model, so answering never buzzes on its own', () => {
+        const channels = source('sources/sync/droverChannels.ts');
+        // ANSWER_CHANNELS is visual and audio. A haptic answer would be a new
+        // channel, and it would need its own trip through this ticket.
+        expect(channels).toContain("ANSWER_CHANNELS = ['visual', 'audio']");
+    });
+
+    it('an answering tap is an interaction, and interactions are off with the switch off', () => {
+        expect(hapticAllowed('interaction', false)).toBe(false);
+    });
+});

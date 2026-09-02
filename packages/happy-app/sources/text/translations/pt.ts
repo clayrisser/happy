@@ -550,9 +550,9 @@ export const pt: TranslationStructure = {
             readReplies: 'Ler respostas em voz alta',
             readRepliesSubtitle: 'Fala cada resposta assim que chega. Código, diffs e saída de ferramentas são ignorados.',
             phoneHaptics: 'Hápticos do telefone',
-            phoneHapticsSubtitle: 'Deixa este telefone vibrar: os pedidos que chegam e os pequenos toques sob o dedo. Desligado, o relógio continua a vibrar e o telefone fica quieto.',
+            phoneHapticsSubtitle: 'Avisos e os toques sob o teu dedo',
             phoneHapticsTitle: 'ESTE TELEFONE',
-            phoneHapticsFooter: 'O pulso é a superfície feita para te avisar. O telefone é o que olhas e ouves, e está no bolso enquanto uma resposta é lida, por isso vem silencioso. Um interruptor para ambos: os avisos de sessão e o retorno ao toque. Ligá-lo não faz nada ao relógio, e desligá-lo não lhe tira nada.',
+            phoneHapticsFooter: 'Desligado por defeito. O relógio vibra sempre.',
         },
         codexPermissionMode: {
             title: 'MODO DE PERMISSÃO CODEX',

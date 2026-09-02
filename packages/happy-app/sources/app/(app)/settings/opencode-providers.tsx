@@ -334,7 +334,7 @@ export default function OpencodeProvidersScreen() {
 
                     <ItemGroup
                         title="API key"
-                        footer="The key stays on the computer. Name the environment variable that holds it and OpenCode reads it there."
+                        footer="Named here, read from the environment."
                     >
                         <Field
                             label="Environment variable"
@@ -407,7 +407,7 @@ export default function OpencodeProvidersScreen() {
                         />
                     </ItemGroup>
 
-                    <ItemGroup footer="OpenCode reads its config at start, so a pane already running keeps the models it had.">
+                    <ItemGroup footer="A running pane keeps the models it had.">
                         <Item
                             title={draft.isNew ? 'Add provider' : 'Save provider'}
                             loading={busy}
@@ -453,8 +453,7 @@ export default function OpencodeProvidersScreen() {
                     ) : providers.length === 0 ? (
                         <Item
                             title="None yet"
-                            subtitle="A provider you wrote by hand stays on the machine page"
-                            subtitleLines={0}
+                            subtitle="Hand-written ones stay on the machine"
                             icon={<Ionicons name="ellipse-outline" size={29} color={grey} />}
                             showChevron={false}
                         />

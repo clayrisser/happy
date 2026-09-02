@@ -5,6 +5,7 @@ import { AUTO_ACCEPT_SUBTITLE } from '../components/autoAcceptRow';
 import { MODE_COPY } from '../sync/droverChannels';
 import { accountGroupFooter, addAccountStatus } from '../sync/machineAccountsFlow';
 import { mcpOnlyFooter } from '../sync/mcpText';
+import { en } from './_default';
 
 /**
  * COPY DENSITY (DROVE-346).
@@ -212,5 +213,51 @@ describe('copy density: generated strings', () => {
         expect(footer).not.toMatch(/not built/);
         expect(mcpOnlyFooter({ ...harness, configured: false }).length)
             .toBeLessThanOrEqual(footerMaxChars);
+    });
+});
+
+/**
+ * The copy that comes through `t()` (DROVE-190).
+ *
+ * The scan above reads JSX string LITERALS, so a row written as
+ * `subtitle={t('...')}` is invisible to it, and the phone-haptics row was
+ * exactly that: a 133-character subtitle and a 312-character footer that
+ * passed a suite whose whole job is to stop them, because the strings live in
+ * text/ and the rule looks at tsx/.
+ *
+ * The scan is not widened here on purpose. Sixty-three rows in the app are
+ * written this way and thirty-two of them are over the bar; nearly all are
+ * upstream Happy's own copy (appearance, voice, account, terminal), which
+ * DROVE-346 already decided not to rewrite. Widening the regex would fail the
+ * suite on a sweep this ticket is not doing. So the drover rows that go
+ * through `t()` are pinned by value, the way the generated strings above are,
+ * and each new one joins this list.
+ */
+describe('copy density: settings copy that arrives through t()', () => {
+    const rows: { key: string; kind: 'subtitle' | 'footer'; text: string }[] = [
+        { key: 'agentInput.channels.phoneHapticsSubtitle', kind: 'subtitle', text: en.agentInput.channels.phoneHapticsSubtitle },
+        { key: 'agentInput.channels.phoneHapticsFooter', kind: 'footer', text: en.agentInput.channels.phoneHapticsFooter },
+    ];
+
+    for (const row of rows) {
+        const max = row.kind === 'footer' ? footerMaxChars : subtitleMaxChars;
+        it(`${row.key} is ${row.kind === 'footer' ? 'one line' : 'one fragment'}: "${row.text}"`, () => {
+            expect(row.text.length).toBeLessThanOrEqual(max);
+        });
+    }
+
+    it('the phone-haptics subtitle is a fragment, like the channel rows above it', () => {
+        // Its neighbours on Settings > Channels are "The alert push, the card,
+        // the watch face" and "A tap on the phone, a buzz on the wrist": no
+        // full stop, one clause. A sentence there reads as a different app.
+        expect(en.agentInput.channels.phoneHapticsSubtitle).not.toMatch(/\.$/);
+    });
+
+    it('the footer still says the two facts the row cannot show', () => {
+        // Shorter is fine. Silent about the default, or about the watch, is
+        // not: those are the whole reason the group exists (DROVE-190).
+        const footer = en.agentInput.channels.phoneHapticsFooter;
+        expect(footer).toMatch(/[Oo]ff by default/);
+        expect(footer).toMatch(/watch/i);
     });
 });

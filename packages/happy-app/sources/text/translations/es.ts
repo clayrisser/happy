@@ -551,9 +551,9 @@ export const es: TranslationStructure = {
             readReplies: 'Leer respuestas en voz alta',
             readRepliesSubtitle: 'Pronuncia cada respuesta a medida que llega. Se omiten el código, los diffs y la salida de herramientas.',
             phoneHaptics: 'Hápticos del teléfono',
-            phoneHapticsSubtitle: 'Deja que este teléfono vibre: las peticiones que llegan y los pequeños toques bajo tu dedo. Apagado, el reloj sigue vibrando y el teléfono se queda quieto.',
+            phoneHapticsSubtitle: 'Avisos y los toques bajo tu dedo',
             phoneHapticsTitle: 'ESTE TELÉFONO',
-            phoneHapticsFooter: 'La muñeca es la superficie pensada para avisarte. El teléfono es el que miras y escuchas, y está en el bolsillo mientras se lee una respuesta, así que llega en silencio. Un solo interruptor para ambas cosas: los avisos de sesión y la respuesta táctil. Activarlo no hace nada al reloj, y desactivarlo no le quita nada.',
+            phoneHapticsFooter: 'Apagado por defecto. El reloj vibra igual.',
         },
         codexPermissionMode: {
             title: 'MODO DE PERMISOS CODEX',

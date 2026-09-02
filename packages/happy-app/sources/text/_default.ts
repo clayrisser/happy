@@ -592,9 +592,9 @@ export const en = {
             // DROVE-190. Title stays inside the 21-character switch-row
             // budget DROVE-175 set; the rest of the sentence is the subtitle.
             phoneHaptics: 'Phone haptics',
-            phoneHapticsSubtitle: 'Let this handset buzz: prompts arriving, and the small taps under your finger. Off, the watch still buzzes and the phone stays still.',
+            phoneHapticsSubtitle: 'Prompts and the taps under your finger',
             phoneHapticsTitle: 'THIS PHONE',
-            phoneHapticsFooter: 'The wrist is the surface meant to tap you. The phone is the one you look at and hear, and it is in a pocket while a reply is read aloud, so it ships silent. One switch, both kinds: session announcements and touch feedback. Turning it on does nothing to the watch, and turning it off takes nothing from the watch.',
+            phoneHapticsFooter: 'Off by default. The watch buzzes either way.',
         },
         codexPermissionMode: {
             title: 'CODEX PERMISSION MODE',
