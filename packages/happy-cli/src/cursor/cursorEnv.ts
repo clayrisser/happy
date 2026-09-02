@@ -25,6 +25,15 @@
  * The rule: a turn gets a key only when the SESSION owns one. Inheritance is
  * not ownership. When a session does own one it is passed explicitly, so the
  * init frame comes back `apiKeySource: "env"` and the row says so.
+ *
+ * A SUBSCRIPTION TOKEN IS NOT PASSED AT ALL (DROVE-387). `--account` runs on a
+ * drover-held token, and there is no spelling of that token in this environment
+ * — the scrub above would eat it, and eating it is correct. It arrives instead
+ * as a private HOME holding cursor-agent's own file credential store, which is
+ * the one place cursor-agent reads a login from that is not the machine
+ * Keychain. The init frame then reads `apiKeySource: "login"`, because from
+ * cursor-agent's side that is exactly what it is: a login, in a store drover
+ * owns. Which account it belongs to is on `DROVER_ACCOUNT`, not on the frame.
  */
 
 /** The variables that move who a turn is and where it is billed. */
@@ -40,6 +49,27 @@ export interface CursorOwnedCredential {
     apiKey?: string | null;
     /** Passed as `CURSOR_API_ENDPOINT`. Only meaningful beside an owned key. */
     apiEndpoint?: string | null;
+    /**
+     * The private HOME whose `.cursor/auth.json` holds this session's own
+     * subscription token (DROVE-387). This is how a `--account` run is given a
+     * credential WITHOUT one being in the environment: HOME plus the file
+     * store, which is where cursor-agent reads a login from and the only path
+     * that never touches the machine Keychain. See cursorCredentialHome.ts.
+     */
+    credentialHome?: string | null;
+}
+
+/**
+ * The variable `drover cursor --account` leaves for the runner to pick up. It
+ * is a PATH, not a secret — the token is a 0600 file inside it — so it may sit
+ * in the environment where `CURSOR_AUTH_TOKEN` may not.
+ */
+export const cursorCredentialHomeVar = 'DROVER_CURSOR_HOME';
+
+/** What this process was told it owns, off its own environment. */
+export function cursorOwnedFromEnv(base: NodeJS.ProcessEnv = process.env): CursorOwnedCredential {
+    const home = base[cursorCredentialHomeVar];
+    return home ? { credentialHome: home } : {};
 }
 
 /**
@@ -55,6 +85,13 @@ export function cursorTurnEnv(
     for (const name of cursorIdentityVars) delete env[name];
     if (owned.apiKey) env.CURSOR_API_KEY = owned.apiKey;
     if (owned.apiEndpoint) env.CURSOR_API_ENDPOINT = owned.apiEndpoint;
+    // The credential the session owns arrives as a PLACE rather than a value
+    // (DROVE-387). The scrub above still runs, and still runs first: a home is
+    // not a licence to also inherit somebody's token.
+    if (owned.credentialHome) {
+        env.HOME = owned.credentialHome;
+        env.AGENT_CLI_CREDENTIAL_STORE = 'file';
+    }
     return env;
 }
 

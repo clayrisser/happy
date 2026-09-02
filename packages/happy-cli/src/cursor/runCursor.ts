@@ -70,7 +70,7 @@ import {
     cursorPermissionModes,
     cursorModeSkipsPermissions,
 } from './cursorPermission';
-import { cursorApiKeySourceIsOwnLogin } from './cursorEnv';
+import { cursorApiKeySourceIsOwnLogin, cursorOwnedFromEnv } from './cursorEnv';
 import { addCursorUsage, emptyCursorUsageTally, type CursorUsageTally } from './cursorStream';
 import { subscribeHarnessAttachments, textWithHarnessAttachments } from '@/utils/harnessAttachments';
 import { createSerialAsyncHandler } from '@/codex/utils/serialAsyncHandler';
@@ -213,6 +213,11 @@ export async function runCursor(opts: RunCursorOptions): Promise<void> {
     const backend = new CursorBackend({
         cwd: process.cwd(),
         configDir,
+        // WHOSE SUBSCRIPTION THIS SESSION BILLS (DROVE-387). `drover cursor
+        // --account` leaves a private HOME holding cursor-agent's own file
+        // credential store; without one this is empty and the turn runs on the
+        // machine login exactly as it did.
+        credential: cursorOwnedFromEnv(),
         model: opts.model ?? null,
         permissionMode: initialMode,
         resumeChatId: opts.resumeChatId ?? null,
