@@ -114,3 +114,118 @@ export const filesRowHeight = 44;
 
 /** The crumb line over the list. */
 export const filesCrumbHeight = 32;
+
+/* ── The Todos tab (DROVE-380) ──────────────────────────────────────────────
+ *
+ * Clay, looking at the tab: "Is there a richer way to display this, or to
+ * communicate this?" The photograph is two grey captions, two grey fragments
+ * and two thirds of a screen of black. DROVE-359 was right to cut the
+ * paragraphs that used to be there, but cutting them left NOTHING behind.
+ *
+ * So the tab gets a shape, and every height it needs is a named number here
+ * rather than a padding somebody eyeballed in the component. The one that
+ * actually fixes the screenshot is `todosEmptySectionHeight`: an empty section
+ * is given real room off the cap and centres its glyph inside it, instead of
+ * stacking one grey line at the top and leaving the rest black.
+ */
+
+/** The section's own box, as WorktreeTodosTab draws it. */
+export const todosSectionInset = { horizontal: 20, top: 4, bottom: 10, gap: 8 } as const;
+
+/** The 10pt caption (NEEDS YOU, TASK LIST), which stays. */
+export const todosCaptionHeight = 14;
+
+/** The caption plus the gap under it: what a section costs before any content. */
+export const todosCaptionBlockHeight = todosSectionInset.top + todosCaptionHeight + todosSectionInset.gap;
+
+/** One checklist line: 13pt text at the leading the transcript's card uses. */
+export const taskRowLineHeight = 19;
+
+/** A task longer than this wraps, and then stops. Two lines is a task; five is a paragraph. */
+export const taskRowMaxLines = 2;
+
+/** Between rows. */
+export const taskRowGap = 6;
+
+/** The state glyph's column, wide enough for the 14pt ring plus its breathing room. */
+export const taskGlyphColumn = 18;
+
+/** The ring, and the live core inside it on the row being worked. */
+export const taskGlyphSize = 14;
+export const taskGlyphCoreSize = 6;
+
+/** The progress bar over the rows. Thin: it is a fact, not a feature. */
+export const taskProgressBarHeight = 3;
+export const taskProgressLabelHeight = 15;
+export const taskProgressGap = 6;
+
+/** `3 of 7` over its bar, plus the gap down to the first row. */
+export const taskProgressBlockHeight =
+    taskProgressLabelHeight + taskProgressGap + taskProgressBarHeight + taskRowGap;
+
+/** How tall a run of task rows is, at one or two lines each. */
+export function taskRowsHeight(lines: readonly number[]): number {
+    if (lines.length === 0) return 0;
+    const rows = lines.reduce((sum, count) => (
+        sum + Math.max(1, Math.min(taskRowMaxLines, count)) * taskRowLineHeight
+    ), 0);
+    return rows + taskRowGap * (lines.length - 1);
+}
+
+/** The empty state's glyph, the fragment under it, and the gap between. */
+export const todosEmptyGlyphSize = 34;
+export const todosEmptyGap = 10;
+export const todosEmptyFragmentHeight = 19;
+
+export const todosEmptyBlockHeight = todosEmptyGlyphSize + todosEmptyGap + todosEmptyFragmentHeight;
+
+/**
+ * The least room an empty section takes, whatever else is on the tab.
+ *
+ * Enough that the glyph has air over and under it rather than sitting on the
+ * caption. When the OTHER section has rows, this is all an empty one gets:
+ * the rows are what he opened the tab for.
+ */
+export const todosEmptyMinHeight = todosEmptyBlockHeight + 32;
+
+/**
+ * The whole area the two sections live in: the cap, less the furniture the
+ * sheet draws above them and the body's padding under them.
+ *
+ * Off `composerSheetCap` for the same reason the terminal box is (see the top
+ * of this file): the tab needs a height it can centre something inside, and a
+ * number picked by hand would stop being true on the next handset.
+ */
+export function todosTabBodyHeight(input: ComposerSheetWindow): number {
+    return Math.max(
+        todosEmptyMinHeight * 2 + todosCaptionBlockHeight * 2,
+        Math.floor(
+            composerSheetCap(input)
+            - worktreeSheetHeaderHeight
+            - sheetTabsBlockHeight
+            - worktreeSheetBodyPadding,
+        ),
+    );
+}
+
+/**
+ * How tall ONE empty section is drawn.
+ *
+ * Both sections empty is the screenshot, and it is the case worth getting
+ * right: they split the tab between them, so two centred glyphs fill the
+ * screen and there is no black third at the bottom. One empty beside one with
+ * rows gets the minimum instead — the rows own the tab, and an empty section
+ * that pushed them off it would be worse than the void it replaced.
+ */
+export function todosEmptySectionHeight(input: ComposerSheetWindow, emptySections: number): number {
+    if (emptySections <= 0) return 0;
+    if (emptySections === 1) return todosEmptyMinHeight;
+    const room = todosTabBodyHeight(input) - todosCaptionBlockHeight * emptySections;
+    return Math.max(todosEmptyMinHeight, Math.floor(room / emptySections));
+}
+
+/** A needs-you card at rest: title over one fragment of context, with the age beside it. */
+export const needsCardCollapsedHeight = 8 + 19 + 4 + 18 + 8;
+
+/** Between the cards. */
+export const needsCardGap = 8;

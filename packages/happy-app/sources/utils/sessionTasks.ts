@@ -98,6 +98,45 @@ export function deriveSessionTasks(todos: readonly TodoItem[] | null | undefined
 }
 
 /**
+ * WHAT A PROGRESS LINE SAYS, and the arithmetic behind the bar (DROVE-380).
+ *
+ * Clay, looking at the Todos tab: "Is there a richer way to display this?" A
+ * stack of bullets tells you what the tasks are and nothing about how far in
+ * the session is. Three of seven is the one fact a glance wants, and it is the
+ * cheapest thing on the screen to draw.
+ *
+ * It lives HERE and not in the component because the wrist reads this file too
+ * (DROVE-129): `tasksDone` and `tasksTotal` go over the wire off the same
+ * derivation, so a bar on the phone and a headline on the watch cannot come to
+ * different numbers.
+ *
+ * Null for an empty list. A bar at zero over "0 of 0" is furniture, and the
+ * empty state has its own glyph and its own fragment.
+ */
+export interface SessionTaskProgress {
+    done: number;
+    total: number;
+    /** `3 of 7`. Never a sentence: the caption above it already says TASK LIST. */
+    label: string;
+    /** The share of the bar that is filled, clamped to 0..1. */
+    fraction: number;
+}
+
+export function sessionTaskProgress(tasks: SessionTasks): SessionTaskProgress | null {
+    if (tasks.total === 0) return null;
+    // Clamped rather than trusted. `completedCount` is counted from the same
+    // array as `total` so it cannot exceed it today, but a bar that renders at
+    // 1.4 of its width is a layout bug in every parent it is ever dropped into.
+    const done = Math.max(0, Math.min(tasks.completedCount, tasks.total));
+    return {
+        done,
+        total: tasks.total,
+        label: `${done} of ${tasks.total}`,
+        fraction: done / tasks.total,
+    };
+}
+
+/**
  * The one line the status row shows without opening anything: `2/7 tasks`.
  *
  * Null when there is nothing to say, because a strip segment reading `0/0` is
