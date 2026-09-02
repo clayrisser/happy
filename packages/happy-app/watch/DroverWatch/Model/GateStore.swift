@@ -45,6 +45,8 @@ final class GateStore: NSObject, ObservableObject {
     /// The Playground cue playing right now, so its row can say so (DROVE-75).
     /// Nil between patterns.
     @Published private(set) var demoPlaying: WristCue?
+    /// The nudge lighting its Playground row, for as long as it can be felt.
+    @Published private(set) var demoPlayingNudge: WristNudge?
     /// The play-all run in flight, cancelled by any other demo tap.
     private var demoTask: Task<Void, Never>?
 
@@ -225,11 +227,30 @@ final class GateStore: NSObject, ObservableObject {
         }
     }
 
+    /// Play one IN-APP nudge from the Playground (DROVE-384).
+    ///
+    /// `demo: true`, so it plays whatever `droverAnnounceHaptic` says. A
+    /// Playground row that does nothing is a broken screen, not a quiet one,
+    /// and the channel switch is the very thing he is here to compare against.
+    /// Nothing is sent, nothing is remembered, no id is deduped.
+    func demoNudge(_ nudge: WristNudge) {
+        demoTask?.cancel()
+        demoPlayingNudge = nudge
+        DroverDemo.log("nudge \(nudge.rawValue): \(nudge.beat.rawValue)")
+        buzzer.nudge(nudge, demo: true)
+        demoTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled else { return }
+            self?.demoPlayingNudge = nil
+        }
+    }
+
     /// Stop a play-all, when the Playground is left mid-run.
     func stopDemo() {
         demoTask?.cancel()
         demoTask = nil
         demoPlaying = nil
+        demoPlayingNudge = nil
     }
 
     /// Every gate the phone lists, newest first.
@@ -664,6 +685,7 @@ final class GateStore: NSObject, ObservableObject {
                     + " text=\(text == nil ? "none" : "typed"); nothing sent"
             )
             lastError = "Demo card, nothing was sent"
+            buzzer.nudge(.answerRefused)
             return false
         }
         // Whitespace is not an answer. The bus refuses a blank one outright
@@ -679,6 +701,7 @@ final class GateStore: NSObject, ObservableObject {
         let picked = (optionId ?? many.first)?.trimmingCharacters(in: .whitespacesAndNewlines)
         if gate.isQuestion && (picked ?? "").isEmpty && (typed ?? "").isEmpty {
             lastError = "A question needs an answer"
+            buzzer.nudge(.answerRefused)
             return false
         }
         answering.insert(gate.id)
@@ -697,8 +720,13 @@ final class GateStore: NSObject, ObservableObject {
         )
         if !send(answer, describing: "answer") {
             answering.remove(gate.id)
+            buzzer.nudge(.answerRefused)
             return false
         }
+        // It left the watch. One tap under the finger that sent it (DROVE-384),
+        // which is the whole of what a nudge is for: the row goes grey and the
+        // wrist says so without him reading anything.
+        buzzer.nudge(.answerSent)
         // The hold has to be able to LAPSE. It is cleared otherwise only when
         // the phone stops listing the gate, so an answer that travels but never
         // lands — a question answered with no option reaches the bus as nothing
@@ -719,6 +747,7 @@ final class GateStore: NSObject, ObservableObject {
         flipping.insert(session.id)
         if !send(DroverFlip(sessionId: session.id, account: account), describing: "flip") {
             flipping.remove(session.id)
+            buzzer.nudge(.answerRefused)
             return
         }
         // Nothing acknowledges a flip on this channel — the session simply
@@ -768,6 +797,21 @@ final class GateStore: NSObject, ObservableObject {
     fileprivate func apply(_ context: [String: Any]) -> Bool {
         guard let data = try? JSONSerialization.data(withJSONObject: context),
               let decoded = try? DroverSnapshot.decoder.decode(DroverSnapshot.self, from: data) else { return false }
+        // The channel switch the wrist obeys, as the phone read it at publish
+        // (DROVE-384). Set BEFORE the diff below, or the first snapshot after
+        // he turns haptics off still buzzes for whatever it carries.
+        buzzer.announceHaptic = decoded.buzzesInApp
+        // And the ids some other path already carried, so the same todo does
+        // not buzz once as the mirrored push and once as this snapshot. The
+        // phone is the only thing that sees both wires; see
+        // DroverSnapshot.alreadyDelivered.
+        buzzer.markDelivered(decoded.alreadyDelivered)
+        // A flip this wrist asked for has LANDED when the phone reports the
+        // session on another account. Read against the outgoing snapshot,
+        // before it is replaced, and only for sessions this watch is holding
+        // in flight — a flip made on the phone is not news for the finger that
+        // did not make it.
+        let landed = DroverSnapshot.flipsThatLanded(from: snapshot, to: decoded, inFlight: flipping)
         // Diffed BEFORE the assignment, because the snapshot being replaced is
         // the only record of what this wrist already knew — on a background
         // wake it is the copy loaded from the app group, which is exactly the
@@ -790,6 +834,10 @@ final class GateStore: NSObject, ObservableObject {
         // complained about is over. Nothing else clears the banner: it is set
         // in five places and, until GateListView, was read in none.
         lastError = nil
+        for id in landed {
+            flipping.remove(id)
+            buzzer.nudge(.flipLanded)
+        }
         // Anything the phone no longer lists is settled; stop holding it back.
         let live = Set(decoded.gates.map(\.id))
         answering.formIntersection(live)
@@ -861,9 +909,13 @@ extension GateStore {
                 // What the phone has heard on the open capture (DROVE-130).
                 applyHeard(message)
             } else if kind == "cue" {
-                // A reply has started being spoken, here or on the phone;
-                // the wrist buzzes either way (DROVE-92).
-                buzzer.replyStarted()
+                // An in-app moment the PHONE is the only one that can see: a
+                // reply starting to be spoken here or there (DROVE-92), the
+                // reader pausing, the reader skipping ahead (DROVE-384).
+                // An unnamed cue is the old wire, which only ever carried the
+                // reply start.
+                let named = (message["cue"] as? String).flatMap(WristNudge.named)
+                buzzer.nudge(named ?? .readingStarted)
             } else {
                 apply(message)
             }

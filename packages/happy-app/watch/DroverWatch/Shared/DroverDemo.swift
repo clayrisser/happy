@@ -143,6 +143,12 @@ enum DroverDemo {
         case .retry: return "thud"
         case .success: return "soft"
         case .failure: return "rough"
+        // The in-app three (DROVE-384). No gate pattern uses them, so they
+        // never reach a cue row; they are here because the enum is one enum
+        // and a nudge row asks for the same word.
+        case .start: return "open"
+        case .stop: return "close"
+        case .click: return "click"
         }
     }
 

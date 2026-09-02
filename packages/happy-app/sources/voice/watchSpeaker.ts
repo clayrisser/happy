@@ -1,4 +1,7 @@
 import { sendDroverWatchVoice } from 'drover-watch';
+
+import type { WristNudgeName } from '@/utils/wristNudges';
+
 import type { SpeechEngine } from './readAloud';
 
 /**
@@ -91,12 +94,31 @@ export async function stopWatchSpeech(): Promise<void> {
 }
 
 /**
+ * One in-app nudge to the wrist (DROVE-384).
+ *
+ * The three the PHONE is the only thing that can see. Read-aloud runs here
+ * even when the wrist is the speaker, so the reader starting, pausing and
+ * skipping ahead reach the watch as a `cue` message or not at all — the
+ * snapshot carries `reading` for the CONTROL to render, and a state the wrist
+ * derives from a snapshot arrives whenever WatchConnectivity gets round to it,
+ * which is not a haptic anyone would connect to what they just did.
+ *
+ * Fire and forget, like the rest of the announce half. `sendMessage` reaches
+ * only a frontmost watch, which is exactly the audience a nudge has: off
+ * screen `WKInterfaceDevice.play` does nothing, so a send that resolves false
+ * lost nothing that could have been felt.
+ */
+export function nudgeWatch(nudge: WristNudgeName): void {
+    void sendDroverWatchVoice({ kind: 'cue', cue: nudge });
+}
+
+/**
  * The reply-start haptic (DROVE-62's cue path, DROVE-92): the wrist buzzes
  * once when a reply begins to be spoken, whichever device speaks it, so a
  * silent watch still tells the wrist a reply began.
  */
 export function cueWatchReplyStart(): void {
-    void sendDroverWatchVoice({ kind: 'cue', cue: 'reply' });
+    nudgeWatch('readingStarted');
 }
 
 /** The wrist as a SpeechEngine, for the routed engine to hand sentences to. */

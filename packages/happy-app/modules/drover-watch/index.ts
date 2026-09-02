@@ -1,5 +1,7 @@
 import { requireOptionalNativeModule, type EventSubscription } from 'expo-modules-core';
 
+import type { WristNudgeName } from '@/utils/wristNudges';
+
 /**
  * Phone-side WatchConnectivity bridge for the Cattle Drover wrist surface
  * (BASED-98). iOS only; every export degrades to a no-op elsewhere so callers
@@ -488,6 +490,30 @@ export interface DroverSnapshot {
      * here", which is what it did before this existed.
      */
     reading?: DroverReading;
+    /**
+     * The synced `droverAnnounceHaptic` channel switch, as this phone read it
+     * at publish (DROVE-384).
+     *
+     * The wrist has always been the surface this switch is ABOUT — DROVE-190
+     * says the watch rides `droverAnnounceHaptic` and never the handset's own
+     * `phoneHaptics` — and until now it never reached the watch. The phone
+     * gated the background WAKE on it and nothing gated the pattern the watch
+     * plays for itself, so a wrist with the channel off still buzzed the
+     * moment the app was on screen. Absent from a phone that predates the key,
+     * and the watch reads absent as ON: it was buzzing yesterday.
+     */
+    announceHaptic?: boolean;
+    /**
+     * Cue ids some OTHER path already carried to this wrist (DROVE-384).
+     *
+     * The dedupe only the phone can make. A todo can reach the watch twice —
+     * as the push iOS mirrors onto it, and as this snapshot — and the two
+     * wires cannot see each other. The phone sees both, because every path
+     * claims a cue id in one on-disk ledger before carrying it, so it names
+     * here the ids whose claim this publish did not win. The watch marks them
+     * played before it diffs.
+     */
+    alreadyDelivered?: string[];
 }
 
 /**
@@ -601,7 +627,15 @@ export interface DroverTransportEvent {
 export type DroverWatchVoiceMessage =
     | { kind: 'speak'; id: string; text: string }
     | { kind: 'speak'; stop: true }
-    | { kind: 'cue'; cue: 'reply' }
+    /**
+     * One in-app nudge the PHONE is the only thing that can see: a reply
+     * starting to be spoken here or on the wrist, the reader pausing, the
+     * reader skipping ahead (DROVE-384). `cue` is a `WristNudgeName`; `reply`
+     * is DROVE-92's original spelling for `readingStarted` and a watch already
+     * on Clay's wrist still answers to it, which matters because TestFlight is
+     * not OTA and the phone can be a build ahead for days.
+     */
+    | { kind: 'cue'; cue: WristNudgeName | 'reply' }
     /**
      * What the phone has heard so far on an open wrist capture (DROVE-130).
      *

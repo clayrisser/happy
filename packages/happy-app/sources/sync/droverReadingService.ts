@@ -25,6 +25,7 @@ import { apiSocket } from './apiSocket';
 import { storage } from './storage';
 import { sessionDisplayTitle } from '@/utils/sessionTitle';
 import { readAloud } from '@/voice/readAloudService';
+import { nudgeWatch } from '@/voice/watchSpeaker';
 import { readingSnapshotOf, type ReadingPolicy, type ReadingSessionRow } from '@/voice/readingControl';
 import {
     bridgeSessionIdOf,
@@ -121,7 +122,22 @@ export function startDroverReading(): () => void {
         void handleReadingCommands(readingSessions(), policy, rpcReporter);
     };
 
+    // What the reader was doing at the last transport change, so a PAUSE can
+    // be told from a resume, a rate change and every other thing that fires
+    // the same listener (DROVE-384). Null until the first one: a listener that
+    // has not heard anything yet does not know.
+    let wasPaused: boolean | null = null;
+
     const publish = () => {
+        // The wrist's tap for a pause, and only for the edge INTO one. The
+        // reader fires this listener for anything that moved, so buzzing on
+        // every one of them would tap the wrist for a rate slider. Resuming
+        // gets no tap of its own: `readingStarted` already covers a reply
+        // beginning to be spoken, and a second beat for the same fact is the
+        // duplicate noise DROVE-190 is about.
+        const paused = readAloud.isPaused;
+        if (wasPaused === false && paused) nudgeWatch('readingPaused');
+        wasPaused = paused;
         const bridgeSessionId = bridgeSessionIdOf(readingSessions());
         if (!bridgeSessionId) return;
         void rpcReporter(bridgeSessionId, { state: readingSnapshotOf(policy) }).catch(() => {});
@@ -130,9 +146,14 @@ export function startDroverReading(): () => void {
     const unsubscribe = storage.subscribe(pump);
     const transport = readAloud.addTransportListener(publish);
     pump();
+    // Seed the pause edge from where the reader actually is, so the first
+    // transport change after this is compared against something true rather
+    // than reading as a pause because nothing had been recorded.
+    wasPaused = readAloud.isPaused;
 
     return () => {
         started = false;
+        wasPaused = null;
         unsubscribe();
         transport();
         forgetAnsweredReadingCommands();
