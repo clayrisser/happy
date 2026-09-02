@@ -217,6 +217,11 @@ export const droverVerbs: readonly DroverVerb[] = [
         summary: 'Bus health, pending prompts, push delivery, gates, services. Reads only.',
         load: () => import('./status'),
     },
+    {
+        name: 'home',
+        summary: 'One ~/.drover for everything drover owns: each mover\'s state, and what a move would do. Reads only; migrate, verify and rollback stay in libexec/drover-home.',
+        load: () => import('./home'),
+    },
 ];
 
 /** Is this a verb the node CLI carries? */
