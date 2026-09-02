@@ -92,6 +92,19 @@ import { resolvePermissionStyle, resolveSelectedOption } from '@/utils/newSessio
 import { MobileGlassSurface } from '@/components/MobileGlass';
 import { getNativeGlassInteractivity } from '@/components/glassInteractionPolicy';
 import { BubblePressable } from '@/components/BubblePressable';
+import { ComposerBubble } from '@/components/ComposerBubble';
+import { ComposerControlButton } from '@/components/ComposerControlButton';
+import { ComposerSessionControls } from '@/components/ComposerSessionControls';
+import { COMPOSER_IN_FIELD_DISC } from '@/components/composerControlColour';
+import { AgentInputAttachmentStrip } from '@/components/AgentInputAttachmentStrip';
+import type { SessionPillLabel } from '@/components/sessionPillLabel';
+import { getPermissionModeShortLabel } from '@/utils/permissionModeLabels';
+import { useImagePicker } from '@/hooks/useImagePicker';
+import {
+    MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
+    MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH,
+    MOBILE_COMPOSER_METRICS,
+} from '@/components/agentInputLayout';
 import { Header } from '@/components/navigation/Header';
 import { MOBILE_GLASS_HEADER_HEIGHT } from '@/components/navigation/headerMetrics';
 import {
@@ -781,6 +794,13 @@ function NewSessionScreen() {
         worktreeKey: s.worktreeKey,
         setWorktreeKey: s.setWorktreeKey,
     })));
+    // The composer's `+` picks images into the draft, the same hook Home's
+    // dock uses (DROVE-358). `handleSend` reads `draft.attachments`, so the
+    // pick has to reach the draft before the send does.
+    const { selectedImages, pickImages, removeImage, clearImages } = useImagePicker();
+    React.useEffect(() => {
+        useNewSessionDraft.getState().setAttachments(selectedImages);
+    }, [selectedImages]);
     const draftAgent = draft.agentType;
     const setSelectedAgent = draft.setAgentType;
     const selectedMachineId = draft.selectedMachineId;
@@ -1216,6 +1236,34 @@ function NewSessionScreen() {
     const currentPermission = resolveSelectedOption(permissionModes, permissionIndex);
     const currentEffort = resolveSelectedOption(effortLevels, effortIndex);
     const permissionStyle = resolvePermissionStyle(currentPermission);
+    /**
+     * WHAT THE COMPOSER'S CAPSULE READS HERE (DROVE-358).
+     *
+     * The same three values the agent button and the gear used to open one at
+     * a time, handed to the component the chat and Home already mount. There
+     * is no read-aloud segment, because there is no session to read from yet,
+     * and `ComposerSessionControls` draws no segment for a reader that is
+     * absent rather than a dead one (DROVE-284). A harness that publishes no
+     * models — Cursor, pi, OpenCode — gets no model segment for the same
+     * reason: `canOpen` says which of the three this new session can take a
+     * pick for, and a segment with nothing behind it is drawn and does not
+     * press.
+     */
+    const composerDiscFill = theme.dark ? COMPOSER_IN_FIELD_DISC.dark : COMPOSER_IN_FIELD_DISC.light;
+    const sessionPillLabel: SessionPillLabel = {
+        mode: getPermissionModeShortLabel(currentPermission) ?? currentPermission?.name ?? null,
+        // The harness's own name when it publishes no model list, which is the
+        // honest reading of "this login's models are unknown" (DROVE-253).
+        model: currentModel?.name ?? agent.label,
+        effort: currentEffort?.name ?? null,
+        // The joined form is the status chip's, and this screen has no chip.
+        text: '',
+    };
+    const composerCapsulePicker = activePicker === 'permission'
+        || activePicker === 'model'
+        || activePicker === 'effort'
+        ? activePicker
+        : null;
     const composerSettingsItems = React.useMemo(() => {
         const items: Array<{
             key: ComposerSettingPickerType;
@@ -1567,6 +1615,10 @@ function NewSessionScreen() {
                     const attachments = draftState.attachments;
                     draftState.setInput('');
                     draftState.setAttachments([]);
+                    // The picker holds the same images the draft did; leaving
+                    // them there would put them straight back on the draft
+                    // through the effect above (DROVE-358).
+                    clearImages();
 
                     // Send initial message if provided
                     if (trimmedPrompt || attachments.length > 0) {
@@ -1607,7 +1659,7 @@ function NewSessionScreen() {
         } finally {
             if (isMountedRef.current) setIsSpawning(false);
         }
-    }, [allMachines, canPickWorktree, currentEffort?.key, currentModelKey, currentPermission?.key, effectiveAgentDefaults.effortLevel, effectiveAgentDefaults.modelMode, effectiveAgentDefaults.permissionMode, navigateToSession, picksWorkspaces, router, selectedAgent, selectedMachineId, selectedPath, worktreeKey]);
+    }, [allMachines, canPickWorktree, clearImages, currentEffort?.key, currentModelKey, currentPermission?.key, effectiveAgentDefaults.effortLevel, effectiveAgentDefaults.modelMode, effectiveAgentDefaults.permissionMode, navigateToSession, picksWorkspaces, router, selectedAgent, selectedMachineId, selectedPath, worktreeKey]);
 
     const canSend = selectedMachineId && selectedMachine && isMachineOnline(selectedMachine) && !isSpawning;
     React.useEffect(() => {
@@ -2112,90 +2164,109 @@ function NewSessionScreen() {
         </MobileGlassSurface>
     );
 
-    const composerNode = (
-        <MobileGlassSurface
-            enabled={isNativeMobile}
-            nativeEffect={isNativeMobile}
-            intensity={88}
-            onLayout={isNativeMobile
-                ? (event) => setMobileComposerHeight(event.nativeEvent.layout.height)
-                : undefined}
-            style={[styles.inputBox, isNativeMobile && styles.mobileInputBox]}
+    /**
+     * THE COMPOSER, WHICH IS ONE COMPONENT ON THIS SCREEN TOO (DROVE-358).
+     *
+     * DROVE-345 folded the chat's composer and Home's dock into one
+     * `ComposerBubble` and left this screen out, so it went on drawing a THIRD
+     * one: a `MobileGlassSurface` of its own, a `BubblePressable` carrying the
+     * harness name, a gear that opened the three settings one sheet deeper, a
+     * mic and its own send button. Clay photographed it against the session
+     * composer — flat grey panel, a thin `+`, a lock and the word Cursor, a
+     * thin arrow — which is the same complaint DROVE-345 answered for Home,
+     * one screen along.
+     *
+     * So the shell, the field's surface and the button row are the shared
+     * component's, and this screen fills the slots: the `+` disc, the capsule
+     * carrying whichever of permission / model / effort THIS harness can take
+     * a pick for, the mic, and send. `composerParity.test.ts` holds all three
+     * screens to it now, because a shared constant does not carry a material
+     * and only a source scan can see a call site drawing its own.
+     */
+    const mobileAddAction = (
+        <ComposerControlButton
+            fill={composerDiscFill}
+            onPress={() => void pickImages()}
+            accessibilityRole="button"
+            accessibilityLabel={t('imageUpload.addContextTitle')}
         >
-            <View style={[styles.inputField, isNativeMobile && styles.mobileInputField]}>
-                <PromptInput
-                    ref={composerInputRef}
-                    compact={isNativeMobile}
-                    placeholder={isNativeMobile ? composerPlaceholder : 'What would you like to work on?'}
-                    onKeyPress={handleKeyPress}
-                />
+            <Ionicons
+                name="add"
+                size={MOBILE_COMPOSER_METRICS.addIconSize}
+                color={theme.colors.text}
+            />
+        </ComposerControlButton>
+    );
+    const mobileSessionControls = (
+        <ComposerSessionControls
+            label={sessionPillLabel}
+            size={MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE}
+            segmentWidth={MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH}
+            verticalSlop={MOBILE_COMPOSER_METRICS.primaryActionSlop}
+            modeKey={currentPermission?.key}
+            effortIndex={effortIndex}
+            effortCount={effortLevels.length}
+            openPicker={composerCapsulePicker}
+            // WHICH OF THE THREE THIS NEW SESSION CAN TAKE A PICK FOR. A
+            // harness that publishes no models gets no model segment rather
+            // than a dead one, which is the same rule that lets it START at
+            // all now (DROVE-358, DROVE-253).
+            canOpen={{
+                permission: showPermission,
+                model: showModel,
+                effort: showEffort,
+            }}
+            onPress={(picker) => togglePicker(picker)}
+        />
+    );
+    const mobileMicAction = (
+        <ComposerControlButton
+            key="mic"
+            onPress={() => composerInputRef.current?.focus()}
+            accessibilityRole="button"
+            accessibilityLabel="Voice input"
+        >
+            <Ionicons name="mic-outline" size={21} color={theme.colors.textSecondary} />
+        </ComposerControlButton>
+    );
+    const promptField = (
+        <PromptInput
+            ref={composerInputRef}
+            compact={isNativeMobile}
+            placeholder={isNativeMobile ? composerPlaceholder : 'What would you like to work on?'}
+            onKeyPress={handleKeyPress}
+        />
+    );
+    const composerNode = isNativeMobile ? (
+        // The measurement stays on the OUTSIDE of the bubble: `nativePickerTop`
+        // reads it as `windowHeight - safeArea.bottom - mobileComposerHeight`
+        // to find where the composer starts, so it has to be the whole
+        // composer's height and not the field's.
+        <View onLayout={(event) => setMobileComposerHeight(event.nativeEvent.layout.height)}>
+            <ComposerBubble
+                style={[styles.inputBox, styles.mobileInputBox]}
+                fieldStyle={styles.mobileInputField}
+                above={selectedImages.length > 0 ? (
+                    <AgentInputAttachmentStrip images={selectedImages} onRemove={removeImage} />
+                ) : null}
+                leading={mobileAddAction}
+                controls={mobileSessionControls}
+                trailing={[mobileMicAction, <React.Fragment key="send">{sendButtonNode}</React.Fragment>]}
+            >
+                {promptField}
+            </ComposerBubble>
+        </View>
+    ) : (
+        /* THE DESKTOP CARD, which is a different arrangement and not the
+           bubble's business: one row with the controls beside the field
+           rather than a bubble with a button row under it. Same split
+           `AgentInput` draws. */
+        <MobileGlassSurface enabled={false} style={styles.inputBox}>
+            <View style={styles.inputField}>
+                {promptField}
             </View>
-            <View style={[
-                styles.actionButtonsContainer,
-                isNativeMobile && styles.mobileActionButtonsContainer,
-            ]}>
-                {!isNativeMobile && <View style={styles.actionButtonsLeft} />}
-                {isNativeMobile && (
-                    <View style={styles.mobileComposerLeftControls}>
-                        <BubblePressable
-                            scaleFeedback={false}
-                            onPress={() => togglePicker('agent')}
-                            style={(pressedState) => [
-                                styles.composerAgentButton,
-                                activePicker === 'agent' && styles.composerControlActive,
-                                pressedState.pressed && styles.configRowPressed,
-                            ]}
-                            accessibilityRole="button"
-                            accessibilityLabel={`Agent: ${agent.label}`}
-                        >
-                            <RNImage
-                                source={agentIcons[agent.key]}
-                                style={[styles.collapsedAgentIcon, { tintColor: theme.colors.textSecondary }]}
-                                resizeMode="contain"
-                            />
-                            <Text style={styles.composerAgentLabel} numberOfLines={1}>
-                                {agent.label}
-                            </Text>
-                            <Ionicons name="chevron-down" size={12} color={theme.colors.textSecondary} />
-                        </BubblePressable>
-                        {composerSettingsItems.length > 0 && (
-                            <BubblePressable
-                                onPress={() => {
-                                    if (activePicker !== 'settings') {
-                                        setComposerSettingsPage(null);
-                                    }
-                                    togglePicker('settings');
-                                }}
-                                hitSlop={6}
-                                style={(pressedState) => [
-                                    styles.composerActionButton,
-                                    activePicker === 'settings' && styles.composerControlActive,
-                                    pressedState.pressed && styles.configRowPressed,
-                                ]}
-                                accessibilityRole="button"
-                                accessibilityLabel={t('settings.title')}
-                            >
-                                <Ionicons name="settings-outline" size={18} color={theme.colors.textSecondary} />
-                            </BubblePressable>
-                        )}
-                    </View>
-                )}
-                {isNativeMobile && (
-                    <BubblePressable
-                        onPress={() => {
-                            composerInputRef.current?.focus();
-                        }}
-                        hitSlop={6}
-                        style={(pressedState) => [
-                            styles.composerActionButton,
-                            pressedState.pressed && styles.configRowPressed,
-                        ]}
-                        accessibilityRole="button"
-                        accessibilityLabel="Voice input"
-                    >
-                        <Ionicons name="mic-outline" size={21} color={theme.colors.textSecondary} />
-                    </BubblePressable>
-                )}
+            <View style={styles.actionButtonsContainer}>
+                <View style={styles.actionButtonsLeft} />
                 {sendButtonNode}
             </View>
         </MobileGlassSurface>
