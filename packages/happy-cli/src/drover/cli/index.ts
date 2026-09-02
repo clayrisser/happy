@@ -65,6 +65,21 @@ export const droverVerbs: readonly DroverVerb[] = [
         load: () => import('./share-sessions'),
     },
     {
+        name: 'accounts',
+        summary: 'List subscriptions, and which are out of headroom. The registry merged with the cooldown ledger.',
+        load: () => import('./accounts'),
+    },
+    {
+        name: 'account',
+        summary: 'The Claude subscriptions, and the sessions that run on them. list / add / rm / rename / use.',
+        load: () => import('./account'),
+    },
+    {
+        name: 'account-of',
+        summary: 'Which account THIS process is running on, from the config dir rather than a stale stamp.',
+        load: () => import('./account-of'),
+    },
+    {
         name: 'stale-sessions',
         summary: 'Running sessions still on the CLI code the last build replaced, by name, and which of them relaunch themselves.',
         load: () => import('./stale-sessions'),
