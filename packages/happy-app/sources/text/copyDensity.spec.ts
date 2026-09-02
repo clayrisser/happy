@@ -6,7 +6,8 @@ import { MODE_COPY } from '../sync/droverChannels';
 import { accountGroupFooter, addAccountStatus } from '../sync/machineAccountsFlow';
 import { mcpOnlyFooter } from '../sync/mcpText';
 import { noTasksHeadline } from '../utils/sessionTasks';
-import { noMachineTrouble, paneStatus, paneTrouble } from '../utils/worktreeSheetTabs';
+
+import { noMachineTrouble, nothingWaitingFragment, paneStatus, paneTrouble } from '../utils/worktreeSheetTabs';
 import { en } from './_default';
 
 /**
@@ -329,6 +330,20 @@ describe('copy density: generated strings', () => {
         // headline and the empty view have to be the one string.
         expect(noTasksHeadline.length).toBeLessThanOrEqual(emptyStateMaxChars);
         expect(noTasksHeadline).not.toMatch(/[.!?]/);
+    });
+
+    it('the Todos tab\'s two empty fragments stay fragments, glyph or no glyph', () => {
+        // DROVE-380 gave both empty states a large glyph and real room to sit
+        // in. Room is exactly what invites a second sentence back, and the JSX
+        // scan cannot see either string any more: both reach the view through
+        // `sections.needs.fragment`, which is a `{` expression. So they are
+        // pinned by value here, the way paneTrouble's answers are.
+        for (const fragment of [nothingWaitingFragment, noTasksHeadline]) {
+            expect(fragment.length).toBeLessThanOrEqual(emptyStateMaxChars);
+            expect(fragment).not.toMatch(/[.!?]/);
+        }
+        expect(nothingWaitingFragment).toBe('Nothing waiting');
+        expect(noTasksHeadline).toBe('No task list yet');
     });
 });
 

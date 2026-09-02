@@ -186,3 +186,17 @@ export function fileNotes(file: {
     if (file.redacted > 0) notes.push(file.redacted === 1 ? '1 secret masked' : `${file.redacted} secrets masked`);
     return notes;
 }
+
+/**
+ * The Todos tab's needs-you fragment (DROVE-380).
+ *
+ * It lives beside the sheet's other strings rather than in todosTabSections,
+ * for one blunt reason: copyDensity.spec has to be able to read it, and
+ * todosTabSections reaches droverGates, which reaches the store, which drags
+ * React Native into a scanner that has no business loading it. The task list's
+ * half of the pair is `noTasksHeadline` in utils/sessionTasks, for the same
+ * kind of reason — the wrist reads that one.
+ *
+ * One fragment. No second sentence (DROVE-346, DROVE-359).
+ */
+export const nothingWaitingFragment = 'Nothing waiting';

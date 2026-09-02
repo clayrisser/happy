@@ -4,6 +4,7 @@ import {
     deriveSessionTasks,
     noTasksHeadline,
     sessionTasksBadge,
+    sessionTaskProgress,
     sessionTasksSectionLabel,
     sessionTasksSummary,
 } from './sessionTasks';
@@ -153,5 +154,53 @@ describe('collectSessionTasks', () => {
         ]);
         expect(sessionTasksSectionLabel(cards)).toBe('3 tasks in 2 sessions');
         expect(sessionTasksSectionLabel(cards.slice(1))).toBe('1 task in 1 session');
+    });
+});
+
+describe('sessionTaskProgress', () => {
+    it('says how far in, in the words the bar is drawn from (DROVE-380)', () => {
+        const tasks = deriveSessionTasks([
+            todo('a', 'completed'),
+            todo('b', 'completed'),
+            todo('c', 'completed'),
+            todo('d', 'in_progress'),
+            todo('e', 'pending'),
+            todo('f', 'pending'),
+            todo('g', 'pending'),
+        ]);
+        expect(sessionTaskProgress(tasks)).toEqual({ done: 3, total: 7, label: '3 of 7', fraction: 3 / 7 });
+    });
+
+    it('draws nothing at all for an empty list, because a bar at zero over 0 of 0 is furniture', () => {
+        expect(sessionTaskProgress(deriveSessionTasks([]))).toBeNull();
+    });
+
+    it('starts at nothing filled and ends full', () => {
+        expect(sessionTaskProgress(deriveSessionTasks([todo('a', 'pending'), todo('b', 'pending')])))
+            .toEqual({ done: 0, total: 2, label: '0 of 2', fraction: 0 });
+        expect(sessionTaskProgress(deriveSessionTasks([todo('a', 'completed'), todo('b', 'completed')])))
+            .toEqual({ done: 2, total: 2, label: '2 of 2', fraction: 1 });
+    });
+
+    it('handles a list of one, which is the shape a bar is easiest to get wrong on', () => {
+        expect(sessionTaskProgress(deriveSessionTasks([todo('a', 'in_progress')])))
+            .toEqual({ done: 0, total: 1, label: '0 of 1', fraction: 0 });
+        expect(sessionTaskProgress(deriveSessionTasks([todo('a', 'completed')])))
+            .toEqual({ done: 1, total: 1, label: '1 of 1', fraction: 1 });
+    });
+
+    it('never hands a parent a fraction outside the bar', () => {
+        // Clamped rather than trusted: a width of 140% is a layout bug in
+        // every container this is ever dropped into.
+        const fabricated = { ...deriveSessionTasks([todo('a', 'pending')]), completedCount: 9 };
+        expect(sessionTaskProgress(fabricated)!.fraction).toBe(1);
+        const negative = { ...deriveSessionTasks([todo('a', 'pending')]), completedCount: -3 };
+        expect(sessionTaskProgress(negative)!.fraction).toBe(0);
+    });
+
+    it('agrees with the headline the wrist reads, so the two surfaces cannot differ', () => {
+        const tasks = deriveSessionTasks([todo('a', 'completed'), todo('b', 'pending')]);
+        expect(tasks.headline).toBe('1 of 2 done');
+        expect(sessionTaskProgress(tasks)!.label).toBe('1 of 2');
     });
 });
