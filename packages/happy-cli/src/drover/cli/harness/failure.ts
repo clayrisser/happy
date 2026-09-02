@@ -51,7 +51,7 @@ function text(value: string | Buffer | undefined): string {
 function commandOf(e: ExecFailure): string {
     if (e.cmd) return e.cmd.trim();
     const first = (e.message ?? '').split('\n')[0] ?? '';
-    const m = /^Command failed: (.+)$/.exec(first.trim());
+    const m = first.trim().match(/^Command failed: (.+)$/);
     return m ? m[1] : '';
 }
 
