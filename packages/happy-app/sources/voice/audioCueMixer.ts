@@ -59,6 +59,15 @@ import type { AudioCues } from '@/sync/settings';
  * start, or over a sound already in the air. Past that they part company, and
  * `tick` is written so the parting is visible.
  *
+ * A PAUSE OVERRULES BOTH OF THEM (DROVE-354). Clay, pausing from the lock
+ * screen: "it does pause the reading, but it doesn't pause all the beeping. It
+ * should pause everything, because the whole point of pausing is to have it be
+ * silent." Every rule above is about who may have the audio route while the
+ * reader is USING it; a pause is him taking the route away from the app
+ * altogether, so it is not another claimant to arbitrate between. It is the
+ * end of the arbitration. See `paused` on the options and the gate at the top
+ * of `tick`.
+ *
  * Driven by `tick`, not by timers of its own. The owner calls it a few times a
  * second and every decision is a synchronous function of the clock, which is
  * what lets the whole state machine be tested without waiting for anything.
@@ -90,6 +99,25 @@ export interface AudioCueMixerOptions {
      * stopped. Left out, the mixer behaves as DROVE-112 did.
      */
     speechPending?: () => boolean;
+    /**
+     * Is HE holding it? (DROVE-354.)
+     *
+     * `readAloud.isPaused`, asked at PLAY TIME rather than checked when a cue
+     * is enqueued, and that is the whole of why it is a function and lives
+     * here rather than a flag the callers set. Cues arrive from several places
+     * — a message walking through the reader, a gate raised on the poller, a
+     * turn ending — and a gate at each of those doors is a gate somebody adds
+     * a fifth door beside. There is one door out of this object, and this is
+     * the check in front of it.
+     *
+     * NOT `speechPending`, which answers false while paused on purpose
+     * (DROVE-233): a pause lasts until he presses something, and a mixer that
+     * read it as "speech is coming" would hold every earcon until it went
+     * stale and silence the heartbeat for the duration. That was the right
+     * answer to "is a sentence about to start" and it is what left the cues
+     * playing into the pause, because false there reads as a genuine gap.
+     */
+    paused?: () => boolean;
 }
 
 interface QueuedEvent {
@@ -119,6 +147,7 @@ export class AudioCueMixer {
     private readonly settings: () => Required<AudioCues>;
 
     private readonly speechPending: () => boolean;
+    private readonly paused: () => boolean;
 
     private state: CueSessionState = {
         reading: false,
@@ -143,6 +172,7 @@ export class AudioCueMixer {
         this.playCue = options.play;
         this.settings = options.settings;
         this.speechPending = options.speechPending ?? (() => false);
+        this.paused = options.paused ?? (() => false);
     }
 
     get dropped(): number {
@@ -214,6 +244,29 @@ export class AudioCueMixer {
             this.beatAt = null;
             return;
         }
+        // PAUSE IS SILENCE, AND SILENCE MEANS THE WHOLE CHANNEL (DROVE-354).
+        // Before the staleness sweep, before the gap rule, before the beat:
+        // nothing below this line can make a sound while he is holding it.
+        //
+        // DROPPED, NOT HELD, and that is the half worth defending. Every other
+        // refusal in this file leaves the queue alone because the block is
+        // measured in milliseconds and the cue may still be true when it
+        // lifts. A pause is not: it lasts until he presses something, so a
+        // queue kept across one is a burst of stale news rattling out the
+        // instant he asks for the voice back — which is the sound he pressed
+        // pause to stop, arriving late and all at once. The cue was a claim
+        // about a moment that has gone.
+        //
+        // The BEAT's clock is cleared rather than left running, so the first
+        // pulse after a resume lands at once and says what the session is
+        // doing now, instead of the cadence resuming mid-stride from a beat
+        // nobody heard.
+        if (this.paused()) {
+            this.dropQueue();
+            this.beatAt = null;
+            return;
+        }
+
         // EVENT staleness, decided FIRST and about events alone. A cue that
         // has waited four seconds has stopped being true, and it makes no
         // difference whether it was speech or another cue that held it up: if
@@ -322,6 +375,12 @@ export class AudioCueMixer {
         // baked into the file cuePlayer renders; multiplying it in here as
         // well is what squared it and put the heartbeat under the voice.
         this.playCue(id, this.settings().volume);
+    }
+
+    /** Everything queued, gone. Counted, because a drop is a fact worth having. */
+    private dropQueue(): void {
+        this.droppedCount += this.queue.length;
+        this.queue = [];
     }
 
     /** Everything that waited too long, gone rather than played late. */
