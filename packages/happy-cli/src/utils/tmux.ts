@@ -339,6 +339,119 @@ const WIN_OPS: Record<TmuxWindowOperation, string> = {
 };
 
 // Commands that support session targeting
+/** What a window needs, as data, so the argv can be built without a tmux. */
+export interface NewWindowArgsInput {
+    sessionName: string;
+    windowName: string;
+    cwd?: string;
+    /** Values set on the window with -e, already filtered of nullish. */
+    env?: Record<string, string>;
+    /** The single command string the pane runs. */
+    command: string;
+}
+
+/**
+ * The argv for `tmux new-window`, with every flag BEFORE the pane command.
+ *
+ * Order is the whole point (DROVE-364). tmux parses its command arguments
+ * with the platform's getopt, and BSD getopt — which is what macOS ships —
+ * does NOT permute argv: it stops at the first non-option argument. The pane
+ * command is that argument, so anything pushed after it is not a flag any
+ * more, it is more of the command.
+ *
+ * The old order put the command first and then -P -F '#{pane_pid}', with
+ * executeTmuxCommand appending -t <session> behind that. tmux therefore ran
+ * `<command> -P -F #{pane_pid} -t <session>` in the pane and printed nothing,
+ * so the caller parsed an EMPTY string as a pid and reported "Failed to
+ * extract PID from tmux output: " with nothing after the colon — while the
+ * pane, handed flags it could not understand, died on creation.
+ *
+ * `--` closes option parsing explicitly, so a pane command that happens to
+ * start with a dash is still a command.
+ */
+export function buildNewWindowArgs(input: NewWindowArgsInput): string[] {
+    const args = ['new-window', '-t', input.sessionName, '-n', input.windowName];
+
+    if (input.cwd) {
+        args.push('-c', input.cwd);
+    }
+
+    for (const [key, value] of Object.entries(input.env ?? {})) {
+        if (value === undefined || value === null) {
+            logger.warn(`[TMUX] Skipping undefined/null environment variable: ${key}`);
+            continue;
+        }
+        if (!/^[A-Z_][A-Z0-9_]*$/i.test(key)) {
+            logger.warn(`[TMUX] Skipping invalid environment variable name: ${key}`);
+            continue;
+        }
+        // Raw KEY=value: the child is spawned with shell:false, so nothing
+        // ever strips quotes we add. Wrapping the value in literal double
+        // quotes, as this used to, set the variable WITH those quotes in it.
+        args.push('-e', `${key}=${value}`);
+    }
+
+    // -P prints the new window, -F says print its pane pid and nothing else.
+    args.push('-P', '-F', '#{pane_pid}');
+
+    // Last, behind --, because everything after it belongs to the pane.
+    args.push('--', input.command);
+
+    return args;
+}
+
+/**
+ * The argv as it is safe to SHOW, which is not the argv that ran.
+ *
+ * A spawn carries the daemon's whole environment in -e flags, auth tokens
+ * included, and this string ends up on Clay's phone. So every -e value is
+ * replaced by its length: the name is what tells you whether the variable
+ * reached the window, and the value never has to leave the machine to say so.
+ */
+export function redactTmuxArgs(args: string[]): string {
+    const shown: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+        if (args[i] === '-e' && i + 1 < args.length) {
+            const eq = args[i + 1].indexOf('=');
+            const name = eq === -1 ? args[i + 1] : args[i + 1].slice(0, eq);
+            const length = eq === -1 ? 0 : args[i + 1].length - eq - 1;
+            shown.push('-e', `${name}=<redacted:${length}>`);
+            i++;
+            continue;
+        }
+        shown.push(args[i]);
+    }
+    return ['tmux', ...shown].join(' ');
+}
+
+/**
+ * A tmux failure said in full: what tmux printed on both streams, what it
+ * exited with, and the command that produced it.
+ *
+ * DROVE-337 called the bare "Failed to extract PID from tmux output: " its
+ * own fault, and DROVE-364 proved it: the stdout was empty, the stderr was
+ * dropped on the floor, and the message named neither the exit code nor the
+ * argv, so the one string that reached the phone said nothing at all.
+ */
+export function describeTmuxFailure(
+    summary: string,
+    args: string[],
+    result: TmuxCommandResult | null,
+): string {
+    const parts = [`${summary}.`];
+    if (!result) {
+        parts.push('tmux could not be run at all (spawn failed).');
+    } else {
+        parts.push(`exit ${result.returncode}.`);
+        const stdout = result.stdout.trim();
+        const stderr = result.stderr.trim();
+        parts.push(stderr ? `stderr: ${stderr}` : 'stderr was empty.');
+        parts.push(stdout ? `stdout: ${stdout}` : 'stdout was empty.');
+    }
+    parts.push(`command: ${redactTmuxArgs(args)}`);
+    return parts.join(' ');
+}
+
 const COMMANDS_SUPPORTING_TARGET = new Set([
     'send-keys', 'capture-pane', 'new-window', 'kill-window',
     'select-window', 'split-window', 'select-pane', 'kill-pane',
@@ -447,8 +560,15 @@ export class TmuxUtilities {
             // Non-send-keys commands
             const fullCmd = [...baseCmd, ...cmd];
 
-            // Add target specification for commands that support it
-            if (cmd.length > 0 && COMMANDS_SUPPORTING_TARGET.has(cmd[0])) {
+            // Add target specification for commands that support it.
+            //
+            // Appending is only safe while the caller passed no positional
+            // argument of its own. tmux stops reading options at the first
+            // one on macOS (BSD getopt does not permute argv), so a trailing
+            // -t behind a command string is swallowed INTO that command
+            // rather than read as a flag. A caller that already placed its
+            // own -t in the right position gets left alone (DROVE-364).
+            if (cmd.length > 0 && COMMANDS_SUPPORTING_TARGET.has(cmd[0]) && !cmd.includes('-t')) {
                 let target = targetSession;
                 if (window) target += `:${window}`;
                 if (pane) target += `.${pane}`;
@@ -785,64 +905,37 @@ export class TmuxUtilities {
             // Build command to execute in the new window
             const fullCommand = args.join(' ');
 
-            // Create new window in session with command and environment variables
-            // IMPORTANT: Don't manually add -t here - executeTmuxCommand handles it via parameters
-            const createWindowArgs = ['new-window', '-n', windowName];
+            // Create the window. Every flag goes BEFORE the pane command and
+            // the target is placed here rather than appended, because tmux
+            // stops parsing options at the first positional argument
+            // (DROVE-364). buildNewWindowArgs owns that order.
+            const createWindowArgs = buildNewWindowArgs({
+                sessionName,
+                windowName,
+                cwd: options.cwd === undefined
+                    ? undefined
+                    : (typeof options.cwd === 'string' ? options.cwd : options.cwd.pathname),
+                env,
+                command: fullCommand,
+            });
 
-            // Add working directory if specified
-            if (options.cwd) {
-                const cwdPath = typeof options.cwd === 'string' ? options.cwd : options.cwd.pathname;
-                createWindowArgs.push('-c', cwdPath);
-            }
-
-            // Add environment variables using -e flag (sets them in the window's environment)
-            // Note: tmux windows inherit environment from tmux server, but we need to ensure
-            // the daemon's environment variables (especially expanded auth variables) are available
             if (env && Object.keys(env).length > 0) {
-                for (const [key, value] of Object.entries(env)) {
-                    // Skip undefined/null values with warning
-                    if (value === undefined || value === null) {
-                        logger.warn(`[TMUX] Skipping undefined/null environment variable: ${key}`);
-                        continue;
-                    }
-
-                    // Validate variable name (tmux accepts standard env var names)
-                    if (!/^[A-Z_][A-Z0-9_]*$/i.test(key)) {
-                        logger.warn(`[TMUX] Skipping invalid environment variable name: ${key}`);
-                        continue;
-                    }
-
-                    // Escape value for shell safety
-                    // Must escape: backslashes, double quotes, dollar signs, backticks
-                    const escapedValue = value
-                        .replace(/\\/g, '\\\\')   // Backslash first!
-                        .replace(/"/g, '\\"')     // Double quotes
-                        .replace(/\$/g, '\\$')    // Dollar signs
-                        .replace(/`/g, '\\`');    // Backticks
-
-                    createWindowArgs.push('-e', `${key}="${escapedValue}"`);
-                }
                 logger.debug(`[TMUX] Setting ${Object.keys(env).length} environment variables in tmux window`);
             }
-
-            // Add the command to run in the window (runs immediately when window is created)
-            createWindowArgs.push(fullCommand);
-
-            // Add -P flag to print the pane PID immediately
-            createWindowArgs.push('-P');
-            createWindowArgs.push('-F', '#{pane_pid}');
 
             // Create window with command and get PID immediately
             const createResult = await this.executeTmuxCommand(createWindowArgs, sessionName);
 
             if (!createResult || createResult.returncode !== 0) {
-                throw new Error(`Failed to create tmux window: ${createResult?.stderr}`);
+                throw new Error(describeTmuxFailure('Failed to create tmux window', createWindowArgs, createResult));
             }
 
             // Extract the PID from the output
             const panePid = parseInt(createResult.stdout.trim());
             if (isNaN(panePid)) {
-                throw new Error(`Failed to extract PID from tmux output: ${createResult.stdout}`);
+                // Carry tmux's own words. An empty stdout with nothing else
+                // said is what made DROVE-364 unreadable from the phone.
+                throw new Error(describeTmuxFailure('Failed to extract PID from tmux output', createWindowArgs, createResult));
             }
 
             logger.debug(`[TMUX] Spawned command in tmux session ${sessionName}, window ${windowName}, PID ${panePid}`);

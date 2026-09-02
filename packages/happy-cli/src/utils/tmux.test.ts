@@ -13,6 +13,9 @@ import {
     buildTmuxSessionIdentifier,
     TmuxSessionIdentifierError,
     TmuxUtilities,
+    buildNewWindowArgs,
+    redactTmuxArgs,
+    describeTmuxFailure,
     type TmuxSessionIdentifier,
 } from './tmux';
 
@@ -452,5 +455,109 @@ describe('Round-trip consistency', () => {
         expect(built.success).toBe(true);
         const parsed = parseTmuxSessionIdentifier(built.identifier!);
         expect(parsed).toEqual(params);
+    });
+});
+
+describe('buildNewWindowArgs (DROVE-364)', () => {
+    const base = { sessionName: 'main', windowName: 'cattle-drover', command: 'drover claude' };
+
+    it('puts every flag before the pane command, because BSD getopt stops at the first positional', () => {
+        const args = buildNewWindowArgs({ ...base, cwd: '/work', env: { FOO: 'bar' } });
+        const commandIndex = args.indexOf('drover claude');
+
+        expect(commandIndex).toBe(args.length - 1);
+        for (const flag of ['-t', '-n', '-c', '-e', '-P', '-F']) {
+            expect(args.indexOf(flag)).toBeGreaterThan(-1);
+            expect(args.indexOf(flag)).toBeLessThan(commandIndex);
+        }
+    });
+
+    it('asks for the pane pid with -P -F, ahead of the command', () => {
+        const args = buildNewWindowArgs(base);
+        expect(args.indexOf('-P')).toBeLessThan(args.indexOf('--'));
+        expect(args[args.indexOf('-F') + 1]).toBe('#{pane_pid}');
+    });
+
+    it('targets the session with -t placed as a flag, not appended behind the command', () => {
+        const args = buildNewWindowArgs(base);
+        expect(args[0]).toBe('new-window');
+        expect(args[args.indexOf('-t') + 1]).toBe('main');
+        expect(args.indexOf('-t')).toBeLessThan(args.indexOf('--'));
+    });
+
+    it('closes option parsing with -- so a command starting with a dash stays a command', () => {
+        const args = buildNewWindowArgs({ ...base, command: '-weird-command' });
+        expect(args[args.length - 2]).toBe('--');
+        expect(args[args.length - 1]).toBe('-weird-command');
+    });
+
+    it('passes -e values raw, with no literal quotes for a shell that never runs', () => {
+        const args = buildNewWindowArgs({ ...base, env: { PATH: '/usr/bin:/bin' } });
+        expect(args).toContain('PATH=/usr/bin:/bin');
+        expect(args.some(arg => arg.includes('"'))).toBe(false);
+    });
+
+    it('skips environment variable names tmux would not accept', () => {
+        const args = buildNewWindowArgs({ ...base, env: { 'BAD-NAME': 'x', GOOD: 'y' } });
+        expect(args).toContain('GOOD=y');
+        expect(args.some(arg => arg.startsWith('BAD-NAME='))).toBe(false);
+    });
+
+    it('omits -c when there is no working directory', () => {
+        expect(buildNewWindowArgs(base)).not.toContain('-c');
+    });
+});
+
+describe('redactTmuxArgs', () => {
+    it('keeps every -e name and replaces every -e value with its length', () => {
+        const shown = redactTmuxArgs(buildNewWindowArgs({
+            sessionName: 'main',
+            windowName: 'w',
+            command: 'drover claude',
+            env: { HAPPY_TOKEN: 'supersecret' },
+        }));
+
+        expect(shown).toContain('HAPPY_TOKEN=<redacted:11>');
+        expect(shown).not.toContain('supersecret');
+    });
+
+    it('leaves the non -e argv readable', () => {
+        const shown = redactTmuxArgs(buildNewWindowArgs({ sessionName: 'main', windowName: 'w', command: 'x' }));
+        expect(shown).toBe('tmux new-window -t main -n w -P -F #{pane_pid} -- x');
+    });
+});
+
+describe('describeTmuxFailure', () => {
+    const args = buildNewWindowArgs({ sessionName: 'main', windowName: 'w', command: 'drover claude' });
+
+    it('carries tmux stderr, the exit code and the command when stdout was empty', () => {
+        const message = describeTmuxFailure('Failed to extract PID from tmux output', args, {
+            returncode: 0,
+            stdout: '',
+            stderr: "can't find session: main",
+            command: ['tmux'],
+        });
+
+        expect(message).toContain('exit 0');
+        expect(message).toContain("stderr: can't find session: main");
+        expect(message).toContain('stdout was empty');
+        expect(message).toContain('tmux new-window -t main');
+    });
+
+    it('says so plainly when tmux could not be run at all', () => {
+        expect(describeTmuxFailure('Failed to create tmux window', args, null))
+            .toContain('tmux could not be run at all');
+    });
+
+    it('never prints an environment value', () => {
+        const withEnv = buildNewWindowArgs({
+            sessionName: 'main', windowName: 'w', command: 'x', env: { HAPPY_TOKEN: 'supersecret' },
+        });
+        const message = describeTmuxFailure('Failed to create tmux window', withEnv, {
+            returncode: 1, stdout: '', stderr: 'nope', command: ['tmux'],
+        });
+
+        expect(message).not.toContain('supersecret');
+        expect(message).toContain('HAPPY_TOKEN=<redacted:11>');
     });
 });
