@@ -20,8 +20,21 @@ const mocks = vi.hoisted(() => ({
     installed: true,
     reachable: true,
     wakes: undefined as number | undefined,
+    /** WCSession.isComplicationEnabled; undefined is a binary before build 22 (DROVE-391). */
+    complication: undefined as boolean | undefined,
     publishes: true,
     wakeSpent: true,
+}));
+
+// The wake ledger is on disk (DROVE-391); back react-native-mmkv with a map.
+const disk = vi.hoisted(() => new Map<string, string>());
+vi.mock('react-native-mmkv', () => ({
+    MMKV: class {
+        getString(key: string) { return disk.get(key); }
+        set(key: string, value: string) { disk.set(key, value); }
+        delete(key: string) { disk.delete(key); }
+        clearAll() { disk.clear(); }
+    },
 }));
 
 vi.mock('drover-watch', () => ({
@@ -33,6 +46,7 @@ vi.mock('drover-watch', () => ({
         installed: mocks.installed,
         reachable: mocks.reachable,
         ...(mocks.wakes === undefined ? {} : { wakes: mocks.wakes }),
+        ...(mocks.complication === undefined ? {} : { complicationEnabled: mocks.complication }),
     }),
     publishDroverSnapshot: (snapshot: DroverSnapshot) => {
         if (!mocks.publishes) return Promise.resolve(false);
@@ -64,6 +78,7 @@ vi.mock('./droverDemo', () => ({
 }));
 
 import { buzzDroverWatch, demoBuzzLine, demoFinishStageMs } from './droverDemoBuzz';
+import { resetWakeLedger, wakeLedger, wakeStretchOpen } from './droverWakeLedger';
 import { wristCues } from '@/utils/wristCues';
 
 const cue = (name: string) => wristCues.find((c) => c.cue === name)!;
@@ -78,8 +93,11 @@ beforeEach(() => {
     mocks.installed = true;
     mocks.reachable = true;
     mocks.wakes = 40;
+    mocks.complication = undefined;
     mocks.publishes = true;
     mocks.wakeSpent = true;
+    disk.clear();
+    resetWakeLedger();
 });
 
 afterEach(() => {
@@ -125,6 +143,50 @@ describe('a gate cue, fired at the wrist', () => {
         const outcome = await buzzDroverWatch(cue('needsYou'), true);
         expect(outcome.ok).toBe(false);
         expect(outcome.ok === false && outcome.why).toContain('no wakes left today');
+        expect(mocks.woken).toHaveLength(0);
+    });
+
+    // The two causes of a dead budget, told apart (DROVE-391). The row Clay
+    // read said both in one sentence, and the fix for one is on the watch
+    // while the fix for the other is tomorrow.
+    it('says the complication is on no face, and nothing about the budget', async () => {
+        mocks.reachable = false;
+        mocks.wakes = 0;
+        mocks.complication = false;
+        const outcome = await buzzDroverWatch(cue('needsYou'), true);
+        expect(outcome.ok).toBe(false);
+        expect(outcome.ok === false && outcome.why).toContain('complication is on no watch face');
+        expect(outcome.ok === false && outcome.why).not.toContain('no wakes left');
+        expect(mocks.woken).toHaveLength(0);
+    });
+
+    it('says the budget is spent when the complication is on a face, and nothing about the face', async () => {
+        mocks.reachable = false;
+        mocks.wakes = 0;
+        mocks.complication = true;
+        const outcome = await buzzDroverWatch(cue('needsYou'), true);
+        expect(outcome.ok).toBe(false);
+        expect(outcome.ok === false && outcome.why).toContain('no wakes left today');
+        expect(outcome.ok === false && outcome.why).not.toContain('complication');
+    });
+
+    // Counted like a real one, so "N of 50 used today" is honest about what
+    // this phone spent; without a stretch, so the next real gate is not
+    // folded into a Playground tap.
+    it('puts a spent wake on the ledger without opening a stretch', async () => {
+        mocks.reachable = false;
+        expect(await buzzDroverWatch(cue('needsYou'), true)).toEqual({ ok: true, how: 'wake' });
+        expect(wakeLedger().used).toBe(1);
+        expect(wakeLedger().lastSpent?.reason).toBe('demo');
+        expect(wakeStretchOpen()).toBe(false);
+    });
+
+    it('counts nothing when the launch was not spent', async () => {
+        mocks.reachable = false;
+        mocks.wakeSpent = false;
+        const outcome = await buzzDroverWatch(cue('needsYou'), true);
+        expect(outcome.ok).toBe(false);
+        expect(wakeLedger().used).toBe(0);
     });
 });
 

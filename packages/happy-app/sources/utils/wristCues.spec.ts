@@ -170,6 +170,30 @@ describe('what the wrist will actually feel', () => {
         expect(dead.detail).toContain('complication');
     });
 
+    // The two causes of a dead budget, told apart (DROVE-391). The line
+    // above is the build that cannot tell, and it keeps naming both.
+    it('names the face, not the budget, when the complication is on no face', () => {
+        const noFace = describeWristFidelity({ ...closed, wakes: 0, complicationEnabled: false });
+        expect(noFace.fidelity).toBe('silent');
+        expect(noFace.detail).toContain('on no watch face');
+        expect(noFace.detail).toContain('Add the complication');
+        expect(noFace.detail).not.toContain('wakes left');
+        // The count has not reached 0 yet, and the face still decides it.
+        expect(describeWristFidelity({ ...closed, wakes: 3, complicationEnabled: false }).fidelity).toBe('silent');
+    });
+
+    it('names the budget, not the face, when the complication is on a face and the day is spent', () => {
+        const spent = describeWristFidelity({ ...closed, wakes: 0, complicationEnabled: true });
+        expect(spent.fidelity).toBe('silent');
+        expect(spent.detail).toContain('spent for today');
+        expect(spent.detail).toContain('tomorrow');
+        expect(spent.detail).not.toContain('complication');
+    });
+
+    it('promises a system tap while the complication is on a face and wakes remain', () => {
+        expect(describeWristFidelity({ ...closed, complicationEnabled: true }).fidelity).toBe('systemTap');
+    });
+
     it('assumes a wake is possible on a build that cannot count them', () => {
         const noBudget = { paired: true, installed: true, reachable: false };
         expect(describeWristFidelity(noBudget).fidelity).toBe('systemTap');

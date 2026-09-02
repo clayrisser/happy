@@ -34,7 +34,10 @@ import { findSessionForAtRisk, isAtRiskListFresh, resolveRemoteControlState, sup
 import { UsageAccountBars } from '@/components/UsageAccountBars';
 import type { UsageBarRow } from '@/components/agentInputUsage';
 import { flipRiskFooter, flipRiskSubtitle, resolveSessionAccount, sessionsLosingRemoteControl } from '@/utils/droverSessionAccount';
-import { describeDroverWakeBudget, getDroverWatchStatus, type DroverWatchStatus } from 'drover-watch';
+import type { DroverWatchStatus } from 'drover-watch';
+import { describeDroverComplication, describeDroverWakesLeft } from '@/utils/droverWatchStatus';
+import { useDroverWatchStatus } from '@/hooks/useDroverWatchStatus';
+import { wakeLedgerLines } from '@/sync/droverWakeLedger';
 import { wristRelayLine } from '@/sync/droverWristRelay';
 import { SessionTasksList, useSessionTasks } from '@/components/SessionTasksList';
 import { StatusDot } from '@/components/StatusDot';
@@ -44,27 +47,6 @@ import { StatusDot } from '@/components/StatusDot';
 // `useReducedMotion`, and a colour handed to it by a table that has since gone.
 // Deleting it is how the card starts honouring reduced motion and stops being a
 // fourth place the dot could drift.
-
-/**
- * What the paired watch can do right now, re-read whenever the app comes back
- * to the foreground, because the one number that matters here (the daily
- * wake budget) moves while the phone is in a pocket (DROVE-86). Null where
- * there is no WatchConnectivity at all (Android, web).
- */
-function useDroverWatchStatus(): DroverWatchStatus | null {
-    const read = () => {
-        const status = getDroverWatchStatus();
-        return status.supported ? status : null;
-    };
-    const [status, setStatus] = React.useState<DroverWatchStatus | null>(read);
-    React.useEffect(() => {
-        const sub = AppState.addEventListener('change', (state) => {
-            if (state === 'active') setStatus(read());
-        });
-        return () => sub.remove();
-    }, []);
-    return status;
-}
 
 /**
  * The last cue the phone could not carry to the wrist (DROVE-224).
@@ -85,17 +67,19 @@ function useWristRefusal(): string | null {
 }
 
 /**
- * One line: pairing state, then the wake budget, which is the number that
- * decides whether a wrist-down gate can buzz at all. 0 with a watch paired
- * and the app installed almost always means the Drover complication is on no
- * watch face, and that is worth reading off a screen rather than inferring
- * from silence (DROVE-62, DROVE-86).
+ * One line: pairing state, or whether the watch app is open. The wake budget
+ * used to ride this line too, and 0 there meant two different things; it is
+ * two rows of its own now, under this one (DROVE-62, DROVE-86, DROVE-391).
  */
 function describeDroverWatch(status: DroverWatchStatus): string {
     if (!status.paired) return 'No watch paired';
     if (!status.installed) return 'Paired, Cattle Drover not installed on the watch';
-    const link = status.reachable ? 'Watch app open' : 'Watch app closed';
-    return `${link}, ${describeDroverWakeBudget(status)}`;
+    return status.reachable ? 'Watch app open' : 'Watch app closed';
+}
+
+/** A wrist that can be reached at all, which is when the wake rows mean anything. */
+function wristPresent(status: DroverWatchStatus): boolean {
+    return status.paired && status.installed;
 }
 
 /**
@@ -187,7 +171,7 @@ function SessionInfoContent({ session }: { session: Session }) {
     const devModeEnabled = __DEV__;
     const sessionName = getSessionName(session);
     const droverPolicySubtitle = droverPolicySummary(session.metadata?.droverPolicy);
-    const watchStatus = useDroverWatchStatus();
+    const { status: watchStatus, ledger: wakeLedgerToday } = useDroverWatchStatus();
     const wristRefusalLine = useWristRefusal();
     const sessionStatus = useSessionStatus(session);
     // The same derivation the sheet and the wrist read (DROVE-167).
@@ -596,6 +580,43 @@ function SessionInfoContent({ session }: { session: Session }) {
                                 subtitle={describeDroverWatch(watchStatus)}
                                 subtitleLines={1}
                                 icon={<Ionicons name="watch-outline" size={29} color="#FF9500" />}
+                                showChevron={false}
+                            />
+                        )}
+                        {/* The two causes of a wrist that cannot be woken,
+                            as two rows (DROVE-391). The complication on no
+                            face is fixed on the watch and no amount of
+                            waiting helps; the day's 50 spent is fixed by
+                            tomorrow. One line said both and Clay could not
+                            tell which he had. */}
+                        {watchStatus && wristPresent(watchStatus) && (
+                            <Item
+                                title="Complication on a face"
+                                subtitle={describeDroverComplication(watchStatus)}
+                                subtitleLines={0}
+                                icon={<Ionicons name="apps-outline" size={29} color="#FF9500" />}
+                                showChevron={false}
+                            />
+                        )}
+                        {watchStatus && wristPresent(watchStatus) && (
+                            <Item
+                                title="Wakes left today"
+                                subtitle={describeDroverWakesLeft(watchStatus)}
+                                subtitleLines={0}
+                                icon={<Ionicons name="flash-outline" size={29} color="#FF9500" />}
+                                showChevron={false}
+                            />
+                        )}
+                        {/* What THIS phone spent, and the last reason it
+                            refused, off the per-day ledger: the wake that
+                            matters most is spent in a background launch
+                            nobody watched (DROVE-391). */}
+                        {watchStatus && wristPresent(watchStatus) && (
+                            <Item
+                                title="Wakes used today"
+                                subtitle={wakeLedgerLines(wakeLedgerToday).join('\n')}
+                                subtitleLines={0}
+                                icon={<Ionicons name="receipt-outline" size={29} color="#FF9500" />}
                                 showChevron={false}
                             />
                         )}

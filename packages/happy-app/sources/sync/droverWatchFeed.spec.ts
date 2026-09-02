@@ -21,6 +21,16 @@ const mocks = vi.hoisted(() => ({
     reachable: true,
     /** Background wakes left today; undefined is a native module without the key (DROVE-86). */
     wakes: undefined as number | undefined,
+    /** WCSession.isComplicationEnabled; undefined is a binary before build 22 (DROVE-391). */
+    complication: undefined as boolean | undefined,
+    /** Whether WCSession has activated; the budget is not a fact before it has (DROVE-391). */
+    activated: true,
+    /** The watch app coming forward or going away (DROVE-391). */
+    onReachability: null as ((event: { reachable: boolean }) => void) | null,
+    /** The phone's synced settings, only what the wake path reads. */
+    settings: undefined as Record<string, unknown> | undefined,
+    /** Whether the native wake went out as a launch; false is a downgrade (DROVE-391). */
+    wakeSpent: true,
     /** The phone's own foreground state, which decides whether a push could reach the wrist (DROVE-224). */
     appState: 'active' as 'active' | 'background',
     onAnswer: null as
@@ -64,7 +74,7 @@ const mocks = vi.hoisted(() => ({
 // client, so each is stubbed down to the surface the feed actually touches.
 vi.mock('./storage', () => ({
     storage: {
-        getState: () => ({ sessions: mocks.sessions, sessionMessages: mocks.sessionMessages }),
+        getState: () => ({ sessions: mocks.sessions, sessionMessages: mocks.sessionMessages, settings: mocks.settings }),
         subscribe: (listener: () => void) => {
             mocks.onStorage = listener;
             return () => { mocks.onStorage = null; };
@@ -156,18 +166,17 @@ vi.mock('react-native-mmkv', () => ({
 vi.mock('drover-watch', () => ({
     isDroverWatchAvailable: () => true,
     getDroverWatchStatus: () => ({
-        supported: true, activated: true, paired: true, installed: true, reachable: mocks.reachable,
+        supported: true, activated: mocks.activated, paired: true, installed: true, reachable: mocks.reachable,
         ...(mocks.wakes === undefined ? {} : { wakes: mocks.wakes }),
+        ...(mocks.complication === undefined ? {} : { complicationEnabled: mocks.complication }),
     }),
-    describeDroverWakeBudget: (status: { wakes?: number }) =>
-        typeof status.wakes === 'number' ? `wake budget ${status.wakes}/50 today` : 'wake budget unknown',
     publishDroverSnapshot: (snapshot: DroverSnapshot) => {
         mocks.published.push(snapshot);
         return Promise.resolve(true);
     },
     wakeDroverWatch: (snapshot: DroverSnapshot) => {
-        mocks.woken.push(snapshot);
-        return Promise.resolve(true);
+        if (mocks.wakeSpent) mocks.woken.push(snapshot);
+        return Promise.resolve(mocks.wakeSpent);
     },
     // The phone widget rides every publish this feed makes (DROVE-260). It is
     // fed the same gates and sessions and writes into the app group instead of
@@ -208,6 +217,10 @@ vi.mock('drover-watch', () => ({
     addDroverTransportListener: (listener: typeof mocks.onTransport) => {
         mocks.onTransport = listener;
         return { remove: () => { mocks.onTransport = null; } };
+    },
+    addDroverReachabilityListener: (listener: typeof mocks.onReachability) => {
+        mocks.onReachability = listener;
+        return { remove: () => { mocks.onReachability = null; } };
     },
     sendDroverTranscript: (delta: DroverTranscriptDelta) => {
         if (!mocks.reachable) return Promise.resolve(false);
@@ -256,7 +269,15 @@ import {
     deservesAWake,
     startDroverWatchFeed,
 } from './droverWatchFeed';
-import { claimWristCues, resetWristRelay, wristRelayLine, wristRelayState } from './droverWristRelay';
+import {
+    claimWristCues,
+    resetWristRelay,
+    wristCueIds,
+    wristCueStateOf,
+    wristRelayLine,
+    wristRelayState,
+} from './droverWristRelay';
+import { resetWakeLedger, wakeLedger, wakeStretchMs } from './droverWakeLedger';
 import { getSessionName } from '@/utils/sessionUtils';
 import { currentDroverAccountRow } from '@/utils/droverUsage';
 import { resolveUsageStrip } from '@/components/agentInputUsage';
@@ -363,11 +384,18 @@ beforeEach(() => {
     mocks.widgetFaces = [];
     mocks.reachable = true;
     mocks.wakes = undefined;
+    mocks.complication = undefined;
+    mocks.activated = true;
+    mocks.onReachability = null;
+    mocks.settings = undefined;
+    mocks.wakeSpent = true;
     mocks.appState = 'active';
     // A cue is claimed at most once EVER, so a ledger left over from the last
     // test would silence the next one's wake and read as a pass (DROVE-224).
+    // The wake ledger's stretch would do the same (DROVE-391).
     disk.clear();
     resetWristRelay();
+    resetWakeLedger();
     mocks.onAnswer = null;
     mocks.onFlip = null;
     mocks.onRefresh = null;
@@ -1687,19 +1715,32 @@ describe('waking the wrist', () => {
         expect(deservesAWake({ gates, sessions: [] }, { gates, sessions: [] })).toBe(false);
     });
 
-    it('wakes when a running session stops, and not when a stopped one stays stopped', () => {
-        expect(
-            deservesAWake(
-                { gates: [], sessions: [live('a', true)] },
-                { gates: [], sessions: [live('a', false)] },
-            ),
-        ).toBe(true);
+    // A session stopping IS a cue (a reachable watch plays it off the
+    // publish) and is NOT a wake (DROVE-391): 300 dead sessions going quiet
+    // overnight were up to 300 launches nobody felt, and the day's 50 were
+    // gone before the first real question. Until DROVE-391 the first
+    // assertion here read `true`.
+    it('does not wake when a running session stops, though the stop is still a cue', () => {
+        const running = { gates: [], sessions: [live('a', true)] };
+        const stopped = { gates: [], sessions: [live('a', false)] };
+        expect(deservesAWake(running, stopped)).toBe(false);
+        expect(wristCueIds(wristCueStateOf(running), stopped)).toEqual(['finished:a']);
         expect(
             deservesAWake(
                 { gates: [], sessions: [live('a', false)] },
                 { gates: [], sessions: [live('a', false)] },
             ),
         ).toBe(false);
+        expect(wristCueIds(wristCueStateOf(stopped), stopped)).toEqual([]);
+    });
+
+    it('still wakes for a gate arriving in the same change as a stop', () => {
+        expect(
+            deservesAWake(
+                { gates: [], sessions: [live('a', true)] },
+                { gates: [gate('s1:r1')], sessions: [live('a', false)] },
+            ),
+        ).toBe(true);
     });
 
     // The budget is the reason this is a question at all: a wake on every
@@ -1951,6 +1992,214 @@ describe('carrying a cue to the wrist while the app is open', () => {
         expect(mocks.woken).toHaveLength(0);
         expect(wristRelayState().gates).toEqual(['s1:r1']);
         expect(claimWristCues(['s1:r1'])).toEqual([]);
+    });
+});
+
+/**
+ * What a wake is spent on, through the feed (DROVE-391).
+ *
+ * The budget was being burned on session stops and on a wake per gate, and
+ * the refusal line could not say which of two causes had emptied it. These
+ * pin the rule end to end: stops are carried and not woken for, a stretch
+ * takes one wake, the cause is named, and the ledger counts it.
+ */
+describe('what the feed spends a wake on (DROVE-391)', () => {
+    function withGates(...ids: string[]) {
+        const requests = Object.fromEntries(ids.map((id) => [id, { tool: 'Bash', arguments: { command: 'ls' } }]));
+        return { s1: session({ path: '/a', requests }) };
+    }
+
+    it('spends no wake for a session stopping while the watch is unreachable, and carries it', () => {
+        mocks.reachable = false;
+        mocks.wakes = 12;
+        mocks.sessions = { s1: session({ path: '/a', running: true }) };
+        start();
+        expect(wristRelayState().running).toEqual(['s1']);
+        mocks.sessions = { s1: session({ path: '/a', running: false }) };
+        mocks.onStorage!();
+        expect(mocks.published).toHaveLength(2);
+        expect(mocks.woken).toHaveLength(0);
+        // Carried, not refused: the record moves on and nothing carries it
+        // twice, and the ledger has nothing to say about it.
+        expect(wristRelayState().running).toEqual([]);
+        expect(claimWristCues(['finished:s1'])).toEqual([]);
+        expect(wakeLedger().refused).toBe(0);
+    });
+
+    it('spends one wake for two gates landing inside one unreachable stretch', async () => {
+        mocks.reachable = false;
+        mocks.wakes = 12;
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        start();
+        mocks.sessions = withGates('r1');
+        mocks.onStorage!();
+        expect(mocks.woken).toHaveLength(1);
+        await Promise.resolve();
+        mocks.sessions = withGates('r1', 'r2');
+        mocks.onStorage!();
+        expect(mocks.published).toHaveLength(3);
+        expect(mocks.woken).toHaveLength(1);
+        // The second rides the application context: carried, recorded, and
+        // on the ledger as folded into the first.
+        expect(wristRelayState().gates).toEqual(['s1:r1', 's1:r2']);
+        expect(claimWristCues(['s1:r2'])).toEqual([]);
+        expect(wakeLedger().used).toBe(1);
+        expect(wakeLedger().refused).toBe(1);
+        expect(wakeLedger().lastRefused?.reason).toBe('stretch');
+    });
+
+    it('spends again once the stretch has run out', async () => {
+        vi.useFakeTimers();
+        try {
+            mocks.reachable = false;
+            mocks.wakes = 12;
+            mocks.sessions = { s1: session({ path: '/a' }) };
+            start();
+            mocks.sessions = withGates('r1');
+            mocks.onStorage!();
+            expect(mocks.woken).toHaveLength(1);
+            await Promise.resolve();
+            vi.advanceTimersByTime(wakeStretchMs);
+            mocks.sessions = withGates('r1', 'r2');
+            mocks.onStorage!();
+            expect(mocks.woken).toHaveLength(2);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    // The wrist was raised in between: it has read the wall, so the next
+    // gate is news again. The native side says so as it happens (build 22).
+    it('spends again once the watch app has come forward', async () => {
+        mocks.reachable = false;
+        mocks.wakes = 12;
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        start();
+        mocks.sessions = withGates('r1');
+        mocks.onStorage!();
+        expect(mocks.woken).toHaveLength(1);
+        await Promise.resolve();
+        expect(mocks.onReachability).not.toBeNull();
+        mocks.onReachability!({ reachable: true });
+        mocks.sessions = withGates('r1', 'r2');
+        mocks.onStorage!();
+        expect(mocks.woken).toHaveLength(2);
+    });
+
+    it('counts the spend on the ledger', async () => {
+        mocks.reachable = false;
+        mocks.wakes = 12;
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        start();
+        mocks.sessions = withGates('r1');
+        mocks.onStorage!();
+        await Promise.resolve();
+        expect(wakeLedger().used).toBe(1);
+        expect(wakeLedger().lastSpent?.reason).toBe('gate');
+    });
+
+    it('says the complication is on no face, and nothing about the budget', () => {
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+            mocks.reachable = false;
+            mocks.wakes = 0;
+            mocks.complication = false;
+            mocks.sessions = { s1: session({ path: '/a' }) };
+            start();
+            mocks.sessions = withGates('r1');
+            mocks.onStorage!();
+            expect(mocks.woken).toHaveLength(0);
+            expect(wristRelayLine()).toContain('complication is on no watch face');
+            expect(wristRelayLine()).not.toContain('wake budget');
+            expect(claimWristCues(['s1:r1'])).toEqual(['s1:r1']);
+            expect(wakeLedger().lastRefused?.reason).toBe('no-face');
+        } finally {
+            log.mockRestore();
+        }
+    });
+
+    it('says the budget is spent when the complication is on a face', () => {
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+            mocks.reachable = false;
+            mocks.wakes = 0;
+            mocks.complication = true;
+            mocks.sessions = { s1: session({ path: '/a' }) };
+            start();
+            mocks.sessions = withGates('r1');
+            mocks.onStorage!();
+            expect(mocks.woken).toHaveLength(0);
+            expect(wristRelayLine()).toContain('wake budget 0/50 today');
+            expect(wristRelayLine()).not.toContain('complication');
+            expect(wakeLedger().lastRefused?.reason).toBe('budget');
+        } finally {
+            log.mockRestore();
+        }
+    });
+
+    // The first second after launch: WatchConnectivity answers 0 before the
+    // session has activated, and the phone used to read that as a spent
+    // budget. The module drops the number; the rule names the link.
+    it('refuses as the link not yet active, never as a spent budget', () => {
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+            mocks.reachable = false;
+            mocks.activated = false;
+            mocks.wakes = undefined;
+            mocks.sessions = { s1: session({ path: '/a' }) };
+            start();
+            mocks.sessions = withGates('r1');
+            mocks.onStorage!();
+            expect(mocks.woken).toHaveLength(0);
+            expect(wristRelayLine()).toContain('not activated');
+            expect(wristRelayLine()).not.toContain('budget');
+            expect(claimWristCues(['s1:r1'])).toEqual(['s1:r1']);
+        } finally {
+            log.mockRestore();
+        }
+    });
+
+    // With the haptic channel off the watch would not buzz on arrival, so a
+    // launch buys nothing. Carried: the application context has the gate.
+    it('spends no wake with haptic off, and carries the gate', () => {
+        mocks.reachable = false;
+        mocks.wakes = 12;
+        mocks.settings = { droverAnnounceHaptic: false };
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        start();
+        mocks.sessions = withGates('r1');
+        mocks.onStorage!();
+        expect(mocks.woken).toHaveLength(0);
+        expect(wristRelayState().gates).toEqual(['s1:r1']);
+        expect(wakeLedger().lastRefused?.reason).toBe('haptic-off');
+    });
+
+    // The native side turned the launch down (build 22 refuses with the
+    // complication off; older binaries downgrade to a plain transfer). No
+    // launch went out, so nothing is coalesced into and the next gate tries.
+    it('closes the stretch when a launch was not spent, so the next gate tries', async () => {
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+            mocks.reachable = false;
+            mocks.wakes = 12;
+            mocks.wakeSpent = false;
+            mocks.sessions = { s1: session({ path: '/a' }) };
+            start();
+            mocks.sessions = withGates('r1');
+            mocks.onStorage!();
+            await Promise.resolve();
+            expect(mocks.woken).toHaveLength(0);
+            expect(claimWristCues(['s1:r1'])).toEqual(['s1:r1']);
+            expect(wakeLedger().used).toBe(0);
+            expect(wakeLedger().lastRefused?.reason).toBe('downgraded');
+            expect(wristRelayLine()).toContain('not spent as a background launch');
+            mocks.wakeSpent = true;
+            mocks.sessions = withGates('r1', 'r2');
+            mocks.onStorage!();
+            expect(mocks.woken).toHaveLength(1);
+        } finally {
+            log.mockRestore();
+        }
     });
 });
 

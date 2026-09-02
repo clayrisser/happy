@@ -18,6 +18,10 @@ const mocks = vi.hoisted(() => ({
     woken: [] as DroverSnapshot[],
     wakeSpent: true,
     wakes: 12 as number | undefined,
+    /** WCSession.isComplicationEnabled; undefined is a binary before build 22 (DROVE-391). */
+    complication: undefined as boolean | undefined,
+    /** The watch app is frontmost. Closed unless a test says otherwise: that is what a wake is for. */
+    reachable: false,
     publishOk: true,
     // The phone widget rides this same wake (DROVE-260).
     widgetFaces: [] as Record<string, unknown>[],
@@ -52,14 +56,19 @@ vi.mock('./droverWatchFeed', () => ({
     collectAccounts: () => [],
 }));
 
+// The wake rule reads each new gate's delivery to know whether it is
+// announced on haptic (DROVE-72). A gate with no event wakes as before.
+vi.mock('./droverGates', () => ({
+    collectGateEntries: () => mocks.gates.map((gate) => ({ gate })),
+}));
+
 vi.mock('drover-watch', () => ({
     isDroverWatchAvailable: () => true,
     getDroverWatchStatus: () => ({
-        supported: true, activated: true, paired: true, installed: true, reachable: false,
+        supported: true, activated: true, paired: true, installed: true, reachable: mocks.reachable,
         ...(mocks.wakes === undefined ? {} : { wakes: mocks.wakes }),
+        ...(mocks.complication === undefined ? {} : { complicationEnabled: mocks.complication }),
     }),
-    describeDroverWakeBudget: (status: { wakes?: number }) =>
-        typeof status.wakes === 'number' ? `wake budget ${status.wakes}/50 today` : 'wake budget unknown',
     publishDroverSnapshot: (snapshot: DroverSnapshot) => {
         if (mocks.publishOk) mocks.published.push(snapshot);
         return Promise.resolve(mocks.publishOk);
@@ -86,10 +95,12 @@ const {
     wristRelayLine,
     wristRelayState,
 } = await import('./droverWristRelay');
+const { resetWakeLedger, wakeLedger } = await import('./droverWakeLedger');
 
 beforeEach(() => {
     disk.clear();
     resetWristRelay();
+    resetWakeLedger();
     mocks.sessions = { s1: {} };
     mocks.gates = [];
     mocks.watchSessions = [];
@@ -97,6 +108,8 @@ beforeEach(() => {
     mocks.woken = [];
     mocks.wakeSpent = true;
     mocks.wakes = 12;
+    mocks.complication = undefined;
+    mocks.reachable = false;
     mocks.publishOk = true;
     mocks.widgetFaces = [];
 });
@@ -164,12 +177,76 @@ describe('the background republish', () => {
         expect(mocks.woken).toHaveLength(0);
     });
 
-    it('carries a session that was running and stopped', async () => {
+    // THE BURNER (DROVE-391). This path woke for any unclaimed cue, and a
+    // silent push lands for every session stop, so 300 dead sessions going
+    // quiet overnight were up to 300 launches nobody felt. A stop is still
+    // carried: the record advances and nothing carries it twice. Until
+    // DROVE-391 the woken count here read 1.
+    it('carries a session that was running and stopped without spending a wake', async () => {
         rememberWristRelayState({ gates: [], sessions: [{ id: 'a', active: true }] });
         mocks.watchSessions = [{ id: 'a', title: 'a', active: false }];
         expect(await republishWatchSnapshot()).toBe(true);
-        expect(mocks.woken).toHaveLength(1);
+        expect(mocks.published).toHaveLength(1);
+        expect(mocks.woken).toHaveLength(0);
         expect(claimWristCues(['finished:a'])).toEqual([]);
+        expect(wristRelayState().running).toEqual([]);
+        expect(wakeLedger().refused).toBe(0);
+    });
+
+    // Reachable means the watch app is frontmost and publish's own
+    // sendMessage has reached it. This path never checked (DROVE-391).
+    it('publishes without waking when the watch app is open', async () => {
+        mocks.reachable = true;
+        mocks.gates = [{ id: 's1:r1', kind: 'permission' }];
+        expect(await republishWatchSnapshot()).toBe(true);
+        expect(mocks.published).toHaveLength(1);
+        expect(mocks.woken).toHaveLength(0);
+        expect(wristRelayState().gates).toEqual(['s1:r1']);
+    });
+
+    it('folds a second gate into the wake already spent this stretch', async () => {
+        mocks.gates = [{ id: 's1:r1', kind: 'permission' }];
+        expect(await republishWatchSnapshot()).toBe(true);
+        expect(mocks.woken).toHaveLength(1);
+        mocks.gates = [{ id: 's1:r1', kind: 'permission' }, { id: 's1:r2', kind: 'question' }];
+        expect(await republishWatchSnapshot()).toBe(true);
+        expect(mocks.published).toHaveLength(2);
+        expect(mocks.woken).toHaveLength(1);
+        expect(wristRelayState().gates).toEqual(['s1:r1', 's1:r2']);
+        expect(wakeLedger().used).toBe(1);
+        expect(wakeLedger().refused).toBe(1);
+    });
+
+    it('says the complication is on no face rather than a spent budget', async () => {
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+            mocks.wakes = 0;
+            mocks.complication = false;
+            mocks.gates = [{ id: 's1:r1', kind: 'permission' }];
+            expect(await republishWatchSnapshot()).toBe(true);
+            expect(mocks.woken).toHaveLength(0);
+            expect(claimWristCues(['s1:r1'])).toEqual(['s1:r1']);
+            expect(wristRelayLine()).toContain('complication is on no watch face');
+            expect(wristRelayLine()).not.toContain('wake budget');
+            expect(wakeLedger().lastRefused?.reason).toBe('no-face');
+        } finally {
+            log.mockRestore();
+        }
+    });
+
+    it('spends no wake at all on a budget of 0, and says so', async () => {
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+            mocks.wakes = 0;
+            mocks.complication = true;
+            mocks.gates = [{ id: 's1:r1', kind: 'permission' }];
+            expect(await republishWatchSnapshot()).toBe(true);
+            expect(mocks.woken).toHaveLength(0);
+            expect(wristRelayLine()).toContain('wake budget 0/50 today');
+            expect(wristRelayState().gates).toEqual([]);
+        } finally {
+            log.mockRestore();
+        }
     });
 
     // A cue nobody felt stays carryable, and the refusal is on record rather
@@ -185,8 +262,16 @@ describe('the background republish', () => {
             expect(wristRelayLine()).toContain('wake budget 12/50 today');
             expect(wristRelayLine()).toContain('a push may still reach the wrist');
             expect(wristRelayState().gates).toEqual([]);
+            expect(wakeLedger().lastRefused?.reason).toBe('downgraded');
         } finally {
             log.mockRestore();
         }
+    });
+
+    it('counts a spent wake on the ledger', async () => {
+        mocks.gates = [{ id: 's1:r1', kind: 'permission' }];
+        expect(await republishWatchSnapshot()).toBe(true);
+        expect(wakeLedger().used).toBe(1);
+        expect(wakeLedger().lastSpent?.reason).toBe('gate');
     });
 });
