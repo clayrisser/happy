@@ -7,6 +7,8 @@ import {
     CHAT_BOTTOM_SCRIM_OVERLAY_OPACITY,
     resolveDockBottomOffset,
     resolveDockInset,
+    resolveMeasuredDockHeight,
+    resolveRestingDockHeight,
     resolveTranscriptBottomScrim,
     resolveTranscriptMask,
 } from './agentDockLayout';
@@ -36,10 +38,18 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
     const height = useReanimatedKeyboardAnimation();
     const headerHeight = useHeaderHeight();
     const animatedPadding = useSharedValue(0);
-    const [dockHeight, setDockHeight] = React.useState(0);
+    // Starts at the composer's RESTING height, not at 0 (DROVE-373). This
+    // number reaches the list as the band it reserves at its visual bottom,
+    // and it gets there through onLayout -> setState -> an effect -> another
+    // setState, so a 0 here is a first paint with the newest message drawn
+    // under the composer. The composer's height is resolved from the value
+    // (DROVE-350), so the resting number is known before anything measures.
+    const [dockHeight, setDockHeight] = React.useState(resolveRestingDockHeight);
 
     const handleDockLayout = React.useCallback((event: LayoutChangeEvent) => {
-        const nextHeight = Math.ceil(event.nativeEvent.layout.height);
+        // Floored here rather than at each reader, so the inset, the mask, the
+        // scrim and the placeholder's bottom edge cannot disagree.
+        const nextHeight = resolveMeasuredDockHeight(Math.ceil(event.nativeEvent.layout.height));
         setDockHeight((currentHeight) => (
             Math.abs(currentHeight - nextHeight) < 1 ? currentHeight : nextHeight
         ));

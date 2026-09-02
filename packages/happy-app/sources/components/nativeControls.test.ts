@@ -36,9 +36,10 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 
 /**
- * Only `.ts` and `.tsx` above, which is what let a parked `.tsx.native` copy
- * sit beside a live file without Metro, tsc, or any scan here seeing it. There
- * is none left: DROVE-154 shipped the one that existed and deleted it.
+ * Only `.ts` and `.tsx` above, which is what lets a parked `.tsx.native` copy
+ * sit beside a live file without Metro, tsc, or any scan here seeing it.
+ * DROVE-154 shipped the one that existed and deleted it; DROVE-373 put it
+ * back, because the device check DROVE-154 recorded as owed came back failed.
  *
  * The policy module and this file are excluded: both quote the markers being
  * scanned for, and a rule that fails on its own statement of itself is not a
@@ -249,16 +250,28 @@ describe('the inventory stays answerable', () => {
         ]);
     });
 
-    it('has shipped the context menu and kept no parked copy beside it', () => {
-        // The other half of the assertion that used to hold the parked file
-        // alive. It said "if a later lane ships it, this flips with the file",
-        // and DROVE-154 is that lane: the verdict is `shipped`, the `.native`
-        // copy is deleted, and the live file is the one `measured` host site.
-        // A second copy reappearing beside a shipping file is the failure this
-        // now guards, because that is how two iOS implementations drift apart.
-        expect(contextMenuVerdict).toBe('shipped');
-        expect(() => statSync(join(__dirname, 'LongPressCopyable.ios.tsx.native'))).toThrow();
-        const site = swiftUiHostSites.find((entry) => entry.source === 'components/LongPressCopyable.ios.tsx');
-        expect(site?.mode).toBe('measured');
+    it('has parked the context menu, kept the copy, and left no host on a message row', () => {
+        // Retargeted at the measured outcome, not relaxed (DROVE-373). It used
+        // to assert `shipped` + no parked copy + a `measured` host site. Every
+        // one of those three now asserts the opposite value with the same
+        // strictness, and the third is the one that matters: the live iOS file
+        // must mount NO host at all, because a message row's height comes from
+        // Yoga. An entry reappearing for it is a regression, not a refactor.
+        expect(contextMenuVerdict).toBe('parked');
+        expect(statSync(join(__dirname, 'LongPressCopyable.ios.tsx.native')).isFile()).toBe(true);
+        expect(swiftUiHostSites.map((entry) => entry.source))
+            .not.toContain('components/LongPressCopyable.ios.tsx');
+        expect(swiftUiImporters.map((entry) => entry.source))
+            .not.toContain('components/LongPressCopyable.ios.tsx');
+        expect(readFileSync(join(__dirname, 'LongPressCopyable.ios.tsx'), 'utf8'))
+            .not.toMatch(/^\s*(import|export).*@expo\/ui/m);
+    });
+
+    it('leaves no `measured` host anywhere, on any file', () => {
+        // The mode itself is what DROVE-373 ruled on. It stays in the type and
+        // in the prose — the next lane needs to know what it is and why it is
+        // not there — but nothing in the tree may be in it, because the only
+        // thing ever in it was a transcript row and that is what broke.
+        expect(swiftUiHostSites.filter((entry) => entry.mode === 'measured')).toEqual([]);
     });
 });
