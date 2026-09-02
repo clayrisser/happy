@@ -7,7 +7,7 @@ import { decodeBase64, encodeBase64, getRandomBytes, encrypt, decrypt, libsodium
 import { PushNotificationClient } from './pushNotifications';
 import { configuration } from '@/configuration';
 import chalk from 'chalk';
-import { Credentials } from '@/persistence';
+import { Credentials, readSettings } from '@/persistence';
 import { connectionState, isNetworkError } from '@/utils/serverConnectionErrors';
 
 export class ApiClient {
@@ -18,10 +18,78 @@ export class ApiClient {
 
   private readonly credential: Credentials;
   private readonly pushClient: PushNotificationClient;
+  private relayInfo: Promise<{ escrowPublicKey: Uint8Array | null }> | null = null;
+  private managedDefault: Promise<boolean> | null = null;
 
   private constructor(credential: Credentials) {
     this.credential = credential
     this.pushClient = new PushNotificationClient(credential.token, configuration.serverUrl)
+  }
+
+  /**
+   * What the relay can do (DROVE-388, decision 0c). A relay that can manage
+   * sessions announces the box public key it escrows session keys to; one
+   * that cannot, or a relay from before this existed (404), announces none
+   * and every session it holds is private. Asked once per client; a network
+   * failure reads as "cannot manage", which is the safe direction: a session
+   * key is never sent to a key the relay did not just publish.
+   */
+  private getRelayInfo(): Promise<{ escrowPublicKey: Uint8Array | null }> {
+    if (!this.relayInfo) {
+      this.relayInfo = (async () => {
+        try {
+          const res = await axios.get<{ escrowPublicKey?: string | null }>(`${configuration.serverUrl}/v1/relay`, { timeout: 5000 });
+          const pk = res.data?.escrowPublicKey;
+          if (typeof pk === 'string' && pk.length > 0) {
+            const bytes = decodeBase64(pk);
+            if (bytes.length === 32) {
+              logger.debug('Relay can manage sessions: announces an escrow public key');
+              return { escrowPublicKey: bytes };
+            }
+          }
+        } catch (error) {
+          logger.debug(`GET /v1/relay unavailable, cannot manage: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        return { escrowPublicKey: null };
+      })();
+    }
+    return this.relayInfo;
+  }
+
+  /**
+   * Whether a new session is managed when nothing on the command line says
+   * (DROVE-388, decision 0c): the machine's override in settings.json
+   * (managedSessions), else the account's "new sessions managed" setting on
+   * the profile, else private. Asked once per client; anything unreadable
+   * reads as private, the direction that hands the relay nothing.
+   */
+  private getManagedDefault(): Promise<boolean> {
+    if (!this.managedDefault) {
+      this.managedDefault = (async () => {
+        try {
+          const settings = await readSettings();
+          if (typeof settings.managedSessions === 'boolean') {
+            logger.debug(`New sessions ${settings.managedSessions ? 'managed' : 'private'}: this machine's override`);
+            return settings.managedSessions;
+          }
+        } catch (error) {
+          logger.debug(`settings.json unreadable, no machine override: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        try {
+          const res = await axios.get<{ newSessionsManaged?: boolean }>(`${configuration.serverUrl}/v1/account/profile`, {
+            headers: { 'Authorization': `Bearer ${this.credential.token}` },
+            timeout: 5000
+          });
+          const managed = res.data?.newSessionsManaged === true;
+          logger.debug(`New sessions ${managed ? 'managed' : 'private'}: the account's default`);
+          return managed;
+        } catch (error) {
+          logger.debug(`GET /v1/account/profile unavailable, new sessions private: ${error instanceof Error ? error.message : String(error)}`);
+          return false;
+        }
+      })();
+    }
+    return this.managedDefault;
   }
 
   /**
@@ -36,16 +104,25 @@ export class ApiClient {
    * with a random per-run tag never see this; the drover bridge, which wants
    * ONE long-lived session per machine, saw nothing else. Same shape as
    * getOrCreateMachine, which has always pinned `machineKey` for this reason.
+   *
+   * `managed` is the session's kind (DROVE-388, decision 0c): true wraps the
+   * session key to the relay as well, so the relay can share the session;
+   * false keeps the relay blind; undefined asks the machine, then the
+   * account, then defaults to private. An explicit true on a relay that
+   * cannot manage throws, with one line saying why, rather than quietly
+   * making a private session.
    */
   async getOrCreateSession(opts: {
     tag: string,
     metadata: Metadata,
     state: AgentState | null,
-    dataKey?: Uint8Array
+    dataKey?: Uint8Array,
+    managed?: boolean
   }): Promise<Session | null> {
 
     // Resolve encryption key
     let dataEncryptionKey: Uint8Array | null = null;
+    let escrowKey: Uint8Array | null = null;
     let encryptionKey: Uint8Array;
     let encryptionVariant: 'legacy' | 'dataKey';
     if (this.credential.encryption.type === 'dataKey') {
@@ -61,6 +138,26 @@ export class ApiClient {
       dataEncryptionKey = new Uint8Array(encryptedDataKey.length + 1);
       dataEncryptionKey.set([0], 0); // Version byte
       dataEncryptionKey.set(encryptedDataKey, 1); // Data key
+
+      // A managed session (DROVE-388, decision 0c): the same key, the same
+      // layout, wrapped to the relay's escrow public key as well, so the
+      // relay can share the session for us. The flag wins, then the
+      // machine's override, then the account's default.
+      const wantManaged = opts.managed ?? await this.getManagedDefault();
+      if (wantManaged) {
+        const relay = await this.getRelayInfo();
+        if (!relay.escrowPublicKey) {
+          if (opts.managed === true) {
+            throw new Error(`This relay cannot manage sessions: ${configuration.serverUrl}/v1/relay announces no escrow key. Start without --managed, or give the relay a key.`);
+          }
+          logger.debug('Managed is the default here but the relay cannot manage; the session is private');
+        } else {
+          const escrowed = libsodiumEncryptForPublicKey(encryptionKey, relay.escrowPublicKey);
+          escrowKey = new Uint8Array(escrowed.length + 1);
+          escrowKey.set([0], 0);
+          escrowKey.set(escrowed, 1);
+        }
+      }
     } else {
       encryptionKey = this.credential.encryption.secret;
       encryptionVariant = 'legacy';
@@ -75,6 +172,7 @@ export class ApiClient {
           metadata: encodeBase64(encrypt(encryptionKey, encryptionVariant, opts.metadata)),
           agentState: opts.state ? encodeBase64(encrypt(encryptionKey, encryptionVariant, opts.state)) : null,
           dataEncryptionKey: dataEncryptionKey ? encodeBase64(dataEncryptionKey) : null,
+          escrowKey: escrowKey ? encodeBase64(escrowKey) : null,
         },
         {
           headers: {

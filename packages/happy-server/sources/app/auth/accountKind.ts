@@ -54,17 +54,19 @@ export async function registerOrLogin(publicKeyHex: string): Promise<{ id: strin
 
     const existing = await db.account.findUnique({
         where: { publicKey: key },
-        select: { id: true, kind: true }
+        select: { id: true, kind: true, admin: true }
     });
     if (existing) {
-        const promote = pinned && existing.kind !== 'owner';
+        // A pinned key is an owner and an admin, whatever it was before:
+        // the pin is the operator's word and it wins on every login.
+        const promote = pinned && (existing.kind !== 'owner' || !existing.admin);
         await db.account.update({
             where: { id: existing.id },
-            data: { updatedAt: new Date(), ...(promote ? { kind: 'owner' as const } : {}) }
+            data: { updatedAt: new Date(), ...(promote ? { kind: 'owner' as const, admin: true } : {}) }
         });
         if (promote) {
             forgetAccountKind(existing.id);
-            log({ module: 'auth', userId: existing.id }, `Account promoted to owner: pinned in ACCOUNT_OWNER_PUBLIC_KEYS`);
+            log({ module: 'auth', userId: existing.id }, `Account promoted to owner and admin: pinned in ACCOUNT_OWNER_PUBLIC_KEYS`);
         }
         return { id: existing.id, kind: promote ? 'owner' : existing.kind };
     }
@@ -77,10 +79,10 @@ export async function registerOrLogin(publicKeyHex: string): Promise<{ id: strin
     const kind: AccountKind = policy === 'guest' && !pinned ? 'guest' : 'owner';
     try {
         const created = await db.account.create({
-            data: { publicKey: key, kind },
+            data: { publicKey: key, kind, admin: pinned },
             select: { id: true, kind: true }
         });
-        log({ module: 'auth', userId: created.id }, `Account created as ${kind} (policy ${policy}${pinned ? ', pinned' : ''})`);
+        log({ module: 'auth', userId: created.id }, `Account created as ${kind} (policy ${policy}${pinned ? ', pinned, admin' : ''})`);
         return created;
     } catch (error) {
         // Two first logins with the same key at once: the loser re-reads the
@@ -102,24 +104,34 @@ export async function registerOrLogin(publicKeyHex: string): Promise<{ id: strin
  * registerOrLogin above, which invalidates the entry it changes.
  */
 const KIND_TTL_MS = 60_000;
-const kinds = new Map<string, { kind: AccountKind; until: number }>();
+const kinds = new Map<string, { kind: AccountKind; admin: boolean; until: number }>();
 
-export async function getAccountKind(userId: string): Promise<AccountKind | null> {
+async function readKind(userId: string): Promise<{ kind: AccountKind; admin: boolean } | null> {
     const now = Date.now();
     const cached = kinds.get(userId);
     if (cached && cached.until > now) {
-        return cached.kind;
+        return cached;
     }
     const account = await db.account.findUnique({
         where: { id: userId },
-        select: { kind: true }
+        select: { kind: true, admin: true }
     });
     if (!account) {
         kinds.delete(userId);
         return null;
     }
-    kinds.set(userId, { kind: account.kind, until: now + KIND_TTL_MS });
-    return account.kind;
+    const entry = { kind: account.kind, admin: account.admin ?? false, until: now + KIND_TTL_MS };
+    kinds.set(userId, entry);
+    return entry;
+}
+
+export async function getAccountKind(userId: string): Promise<AccountKind | null> {
+    return (await readKind(userId))?.kind ?? null;
+}
+
+/** May flip other accounts' kind. Same cache, same invalidation as the kind. */
+export async function isAccountAdmin(userId: string): Promise<boolean> {
+    return (await readKind(userId))?.admin ?? false;
 }
 
 export function forgetAccountKind(userId: string): void {

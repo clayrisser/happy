@@ -45,6 +45,12 @@ interface Settings {
   sandboxConfig?: SandboxConfig
   serverUrl?: string
   webappUrl?: string
+  /**
+   * This machine's override for whether a new session is managed (the relay
+   * holds its key) or private (DROVE-388, decision 0c). Unset, the account's
+   * default on the profile decides; --managed / --private beat both.
+   */
+  managedSessions?: boolean
 }
 
 const defaultSettings: Settings = {

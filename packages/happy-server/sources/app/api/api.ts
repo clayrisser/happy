@@ -25,6 +25,7 @@ import { v3SessionRoutes } from "./routes/v3SessionRoutes";
 import { attachmentRoutes } from "./routes/attachmentRoutes";
 import { projectRoutes } from "./routes/projectRoutes";
 import { sessionGrantRoutes } from "./routes/sessionGrantRoutes";
+import { relayRoutes } from "./routes/relayRoutes";
 import { isLocalStorage, getLocalFilesDir } from "@/storage/files";
 import * as path from "path";
 import * as fs from "fs";
@@ -103,6 +104,7 @@ export async function startApi(opts: StartApiOptions = {}) {
     pushRoutes(typed);
     sessionRoutes(typed);
     sessionGrantRoutes(typed);
+    relayRoutes(typed);
     accountRoutes(typed);
     connectRoutes(typed);
     machinesRoutes(typed);

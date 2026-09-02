@@ -44,6 +44,9 @@ declare global {
             activeAt: number;
             createdAt: number;
             updatedAt: number;
+            // DROVE-388: private or managed, and whether it was ever managed.
+            managed?: boolean;
+            wasManagedAt?: number | null;
         } | {
             t: 'update-session'
             id: string;
