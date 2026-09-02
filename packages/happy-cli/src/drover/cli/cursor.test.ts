@@ -46,6 +46,7 @@ import {
     desiredHooks,
     mergeHooks,
     run,
+    storeAuth,
     type CursorAuth,
     type CursorIo,
     type CursorTokenState,
@@ -72,7 +73,7 @@ function fakeAuth(table: Record<string, { code: number; state?: CursorTokenState
             const row = table[account];
             if (!row) return { code: 1, lines: [] };
             if (row.code !== 0) return { code: row.code, lines: [] };
-            return { code: 0, lines: ['CURSOR_AUTH_TOKEN=tok-for-' + account, 'AGENT_CLI_CREDENTIAL_STORE=memory'] };
+            return { code: 0, lines: ['DROVER_CURSOR_HOME=/state/cursor-home/' + account, 'AGENT_CLI_CREDENTIAL_STORE=file'] };
         },
         token: (account) => (table[account] ? `tok-for-${account}` : null),
         state: (token) => {
@@ -278,12 +279,16 @@ describe('drover cursor', () => {
         expect(existsSync(unknown.hooksFile)).toBe(false);
     });
 
-    it('hands a live account its own token inline, with the memory store and the renew warning', async () => {
+    it('points a live account at its own file credential store, with the renew warning', async () => {
         const h = harness({ auth: fakeAuth({ jam: { code: 0, state: 'renew', renew: '5' } }) });
         h.io.env.CURSOR_API_KEY = 'sk-should-not-survive';
         expect(await run(['--account', 'jam'], h.io)).toBe(0);
-        expect(h.io.env.CURSOR_AUTH_TOKEN).toBe('tok-for-jam');
-        expect(h.io.env.AGENT_CLI_CREDENTIAL_STORE).toBe('memory');
+        // DROVE-387: a PLACE, not a token. CURSOR_AUTH_TOKEN would be scrubbed
+        // out of the turn env by cursorEnv.ts and reach cursor-agent as
+        // nothing at all, which is how --account ran on an empty store.
+        expect(h.io.env.DROVER_CURSOR_HOME).toBe('/state/cursor-home/jam');
+        expect(h.io.env.AGENT_CLI_CREDENTIAL_STORE).toBe('file');
+        expect(h.io.env.CURSOR_AUTH_TOKEN).toBeUndefined();
         expect(h.io.env.DROVER_ACCOUNT).toBe('jam');
         expect(h.io.env.DROVER_HARNESS).toBe('cursor');
         // A stray key can never bill Clay for a session he asked to run on a
@@ -568,12 +573,15 @@ describe('drover cursor: the environment the harness binary is handed', () => {
         expect(fromShell.STATE_DIR).toBe(stateDir);
     });
 
-    it('carries an account credential to the child from both arms, memory store and all', async () => {
+    it('carries an account credential to the child as a private home and the file store, never as a token', async () => {
         // The one path that ADDS variables. `cursor_run_env` in the shell and
-        // `runEnv` here both answer CURSOR_AUTH_TOKEN + AGENT_CLI_CREDENTIAL_STORE,
-        // and the second is what keeps a managed run off the machine-wide
-        // Keychain slot — the variable whose absence would be invisible in a
-        // stdout differential and catastrophic in life.
+        // `runEnv` here both answer DROVER_CURSOR_HOME + AGENT_CLI_CREDENTIAL_STORE
+        // (DROVE-387), and the second is what keeps a managed run off the
+        // machine-wide Keychain slot — the variable whose absence would be
+        // invisible in a stdout differential and catastrophic in life. The
+        // first is the credential itself, as a PLACE: the token never travels
+        // in the environment, because cursorTurnEnv would scrub it and the
+        // child would start on an empty store, which is the bug this pins shut.
         const binDir = tempDir('stubacct');
         const home = tempDir('acsthome');
         const sessionConfig = join(home, 'sessionconf');
@@ -588,20 +596,87 @@ describe('drover cursor: the environment the harness binary is handed', () => {
         });
         expect(await run(['--account', 'work'], h.io)).toBe(0);
 
-        const { cursorTurnEnv } = await import('@/cursor/cursorEnv');
+        const { cursorTurnEnv, cursorOwnedFromEnv } = await import('@/cursor/cursorEnv');
         const out = join(binDir, 'child.env');
-        const childEnv = cursorTurnEnv(sessionConfig, {}, h.io.env as Record<string, string>) as Record<string, string>;
+        // Exactly what runCursor does: what the launcher left in the env is
+        // what the session owns, and the turn is built from that.
+        const armEnv = h.io.env as Record<string, string>;
+        const childEnv = cursorTurnEnv(sessionConfig, cursorOwnedFromEnv(armEnv), armEnv) as Record<string, string>;
         execFileSync(join(binDir, 'cursor-agent'), ['create-chat'], {
             env: { ...childEnv, DROVER_STUB_ENV_OUT: out },
             stdio: ['ignore', 'pipe', 'pipe'],
         });
         const child = readEnvFile(out);
 
-        expect(child.AGENT_CLI_CREDENTIAL_STORE).toBe('memory');
+        expect(child.AGENT_CLI_CREDENTIAL_STORE).toBe('file');
+        expect(child.DROVER_CURSOR_HOME).toBe('/state/cursor-home/work');
+        // The swap that makes the file store THIS account's: cursor-agent
+        // resolves auth.json from homedir(), and homedir() is HOME.
+        expect(child.HOME).toBe('/state/cursor-home/work');
+        expect(child.CURSOR_AUTH_TOKEN).toBeUndefined();
         expect(child.DROVER_ACCOUNT).toBe('work');
         expect(child.DROVER_HARNESS).toBe('cursor');
         // An inherited key never reaches the child: cursorTurnEnv scrubs the
         // identity variables, and the launcher unset this one before that.
         expect(child.CURSOR_API_KEY).toBeUndefined();
+    });
+});
+
+/**
+ * The REAL store, against a fixture (DROVE-387).
+ *
+ * Everything else in this file injects a fake CursorAuth, which is the rule.
+ * This one case runs the real `storeAuth` because the thing under test is what
+ * it PUTS ON DISK, and a fake cannot lie about that convincingly. The token is
+ * a JWT this file mints — a header, a payload with an `exp` a decade out, and
+ * the literal string `sig` — so nothing here reads a credential either.
+ */
+describe('storeAuth().runEnv', () => {
+    function fixtureToken(expSec: number): string {
+        const body = Buffer.from(JSON.stringify({ exp: expSec, sub: 'FIXTURESECRET' })).toString('base64url');
+        return `eyJhbGciOiJub25lIn0.${body}.sig`;
+    }
+
+    it('lands the credential in the file store under the account\'s private home', () => {
+        const home = tempDir('realhome');
+        const state = tempDir('realstate');
+        mkdirSync(join(home, '.cursor'), { recursive: true });
+        writeFileSync(join(home, '.cursor', 'mcp.json'), '{"mcpServers":{}}\n');
+        writeFileSync(join(home, '.gitconfig'), '[user]\n\temail = clayrisser@gmail.com\n');
+        const store = join(state, 'cursor-auth.json');
+        const token = fixtureToken(Math.floor(Date.now() / 1000) + 10 * 365 * 86400);
+        writeFileSync(store, JSON.stringify({ jam: { token, email: 'jam@example.com' } }));
+
+        const auth = storeAuth({ STATE_DIR: state, DROVER_CURSOR_AUTH: store } as never, home);
+        const resolved = auth.runEnv('jam');
+        expect(resolved.code).toBe(0);
+
+        const vars = Object.fromEntries(resolved.lines.map((l) => {
+            const eq = l.indexOf('=');
+            return [l.slice(0, eq), l.slice(eq + 1)];
+        }));
+        expect(vars.AGENT_CLI_CREDENTIAL_STORE).toBe('file');
+        expect(vars.DROVER_CURSOR_HOME).toBe(join(state, 'cursor-home', 'jam'));
+        // No spelling of the token appears in what the run is handed.
+        expect(resolved.lines.join('\n')).not.toContain(token);
+
+        // It is on disk, where cursor-agent reads a login from — and nowhere else.
+        const credential = join(vars.DROVER_CURSOR_HOME, '.cursor', 'auth.json');
+        expect(JSON.parse(readFileSync(credential, 'utf8')).accessToken).toBe(token);
+        expect(existsSync(join(home, '.cursor', 'auth.json'))).toBe(false);
+        // And the session still has Clay's git identity and his MCP servers.
+        expect(readFileSync(join(vars.DROVER_CURSOR_HOME, '.gitconfig'), 'utf8')).toContain('clayrisser@gmail.com');
+        expect(readFileSync(join(vars.DROVER_CURSOR_HOME, '.cursor', 'mcp.json'), 'utf8')).toBe('{"mcpServers":{}}\n');
+    });
+
+    it('writes nothing at all for a dead token or an account nobody stored', () => {
+        const home = tempDir('realhome2');
+        const state = tempDir('realstate2');
+        const store = join(state, 'cursor-auth.json');
+        writeFileSync(store, JSON.stringify({ dead: { token: fixtureToken(1) } }));
+        const auth = storeAuth({ STATE_DIR: state, DROVER_CURSOR_AUTH: store } as never, home);
+        expect(auth.runEnv('dead').code).toBe(2);
+        expect(auth.runEnv('nobody').code).toBe(1);
+        expect(existsSync(join(state, 'cursor-home'))).toBe(false);
     });
 });

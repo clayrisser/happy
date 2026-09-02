@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { cursorTurnEnv, scrubbedCursorVars, cursorApiKeySourceIsOwnLogin } from './cursorEnv';
+import { cursorTurnEnv, scrubbedCursorVars, cursorApiKeySourceIsOwnLogin, cursorOwnedFromEnv } from './cursorEnv';
 
 describe('cursorTurnEnv', () => {
     it('scrubs an inherited key, token and endpoint', () => {
@@ -33,6 +33,24 @@ describe('cursorTurnEnv', () => {
         expect(env.CURSOR_API_ENDPOINT).toBe('https://mine');
     });
 
+    it('an owned credential HOME arrives as a place, never as a token (DROVE-387)', () => {
+        const env = cursorTurnEnv('/cfg', { credentialHome: '/state/cursor-home/jam' }, {
+            HOME: '/Users/clay',
+            CURSOR_AUTH_TOKEN: 'tok-that-must-not-travel',
+            AGENT_CLI_CREDENTIAL_STORE: 'memory',
+        });
+        expect(env.HOME).toBe('/state/cursor-home/jam');
+        expect(env.AGENT_CLI_CREDENTIAL_STORE).toBe('file');
+        // The whole bug: this is what the scrub eats, and it stays eaten.
+        expect(env.CURSOR_AUTH_TOKEN).toBeUndefined();
+    });
+
+    it('leaves HOME and the store alone when the session owns nothing', () => {
+        const env = cursorTurnEnv('/cfg', {}, { HOME: '/Users/clay' });
+        expect(env.HOME).toBe('/Users/clay');
+        expect(env.AGENT_CLI_CREDENTIAL_STORE).toBeUndefined();
+    });
+
     it('never mutates the environment it was handed', () => {
         const base = { CURSOR_API_KEY: 'key_someone_elses' };
         cursorTurnEnv('/cfg', {}, base);
@@ -54,5 +72,14 @@ describe('cursorApiKeySourceIsOwnLogin', () => {
         expect(cursorApiKeySourceIsOwnLogin('env')).toBe(false);
         expect(cursorApiKeySourceIsOwnLogin('flag')).toBe(false);
         expect(cursorApiKeySourceIsOwnLogin('config')).toBe(false);
+    });
+});
+
+describe('cursorOwnedFromEnv', () => {
+    it('reads the home the launcher left, and owns nothing without one', () => {
+        expect(cursorOwnedFromEnv({ DROVER_CURSOR_HOME: '/state/cursor-home/jam' }))
+            .toEqual({ credentialHome: '/state/cursor-home/jam' });
+        expect(cursorOwnedFromEnv({})).toEqual({});
+        expect(cursorOwnedFromEnv({ DROVER_CURSOR_HOME: '' })).toEqual({});
     });
 });

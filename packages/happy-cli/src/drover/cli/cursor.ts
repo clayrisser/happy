@@ -62,6 +62,8 @@ import { droverEnv } from './env';
 import { guardHarness } from './harness/failure';
 import { defaultIo as defaultEnterIo, reenterLine, runEnter } from './harness/tmuxEnter';
 import { droverTmuxHavePane, type Env } from './harness/tmuxEntry';
+import { cursorCredentialHomeDir, prepareCursorCredentialHome } from '@/cursor/cursorCredentialHome';
+import { cursorCredentialHomeVar } from '@/cursor/cursorEnv';
 
 export const HELP = `drover cursor — a Cursor agent session, managed like a Claude Code one.
 
@@ -435,10 +437,23 @@ export function storeAuth(env: Env, home: string): CursorAuth {
             const tok = token(account);
             if (!tok) return { code: 1, lines: [] };
             if (!cursorTokenUsable(state(tok))) return { code: 2, lines: [] };
-            // AGENT_CLI_CREDENTIAL_STORE=memory is not a tuning knob: it is the
-            // only thing standing between a per-account token and Clay's
-            // ambient login. cursor-agent PERSISTS whatever token it is handed.
-            return { code: 0, lines: [`CURSOR_AUTH_TOKEN=${tok}`, 'AGENT_CLI_CREDENTIAL_STORE=memory'] };
+            // THE TOKEN DOES NOT TRAVEL AS A VARIABLE (DROVE-387). It used to
+            // go out as CURSOR_AUTH_TOKEN beside AGENT_CLI_CREDENTIAL_STORE=
+            // memory, and DROVE-253 scrubs that variable out of every turn — so
+            // the only half that survived was the empty store, and the session
+            // started as nobody with no way to sign in. It goes into the file
+            // store under a private HOME instead, which is where cursor-agent
+            // reads a login from and the only path that never touches the
+            // shared Keychain. The store is still not the machine's, which was
+            // the whole point of `memory`; it is a store with the credential in
+            // it. See cursor/cursorCredentialHome.ts for the measurement.
+            let credHome: string;
+            try {
+                credHome = prepareCursorCredentialHome(cursorCredentialHomeDir(denv.stateDir, account), tok, home);
+            } catch {
+                return { code: 3, lines: [] };
+            }
+            return { code: 0, lines: [`${cursorCredentialHomeVar}=${credHome}`, 'AGENT_CLI_CREDENTIAL_STORE=file'] };
         },
         async renewWarn(account) {
             const tok = token(account);
@@ -817,10 +832,11 @@ export async function run(args: string[], io: CursorIo = defaultIo()): Promise<n
 
     // WHICH SUBSCRIPTION THIS SESSION BILLS (DROVE-256).
     //
-    // With no --account the session runs on whatever this Mac is logged into.
-    // With one, the account's token goes out INLINE and the run is sealed off
-    // from the shared credential entirely — see storeAuth for the measurement
-    // behind AGENT_CLI_CREDENTIAL_STORE=memory.
+    // With no --account the session runs on whatever this Mac is logged into,
+    // and nothing here touches its environment. With one, the account's token
+    // goes into a private FILE credential store and the run is sealed off from
+    // the shared one entirely — see storeAuth and cursor/cursorCredentialHome.ts
+    // for the measurement behind that.
     //
     // A DEAD ACCOUNT IS REFUSED BEFORE THE SESSION STARTS rather than discovered
     // mid-turn. A cursor token CANNOT be renewed, so the repair is another
@@ -849,6 +865,15 @@ export async function run(args: string[], io: CursorIo = defaultIo()): Promise<n
             io.err('');
             io.err(`      drover account login --harness cursor ${account}`);
             return 4;
+        }
+        if (resolved.code === 3) {
+            // The token is fine; the place to put it is not. Saying "no token
+            // stored" here would send him to log in again, which repairs
+            // nothing and costs a browser round trip.
+            io.err(`drover cursor: could not prepare the private cursor home for '${account}'.`);
+            io.err(`  Wanted:  ${cursorCredentialHomeDir(denv.stateDir, account)}`);
+            io.err('  Check that STATE_DIR is writable, then try again.');
+            return 5;
         }
         if (resolved.code !== 0) {
             io.err(`drover cursor: no cursor token stored for '${account}'.`);

@@ -16,6 +16,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { resolveCursorBin } from './cursorBin';
+import { cursorOwnedFromEnv, cursorTurnEnv } from './cursorEnv';
 
 const execFileAsync = promisify(execFile);
 
@@ -49,7 +50,11 @@ export async function listCursorModels(configDir: string, cwd: string): Promise<
     try {
         const { stdout } = await execFileAsync(resolveCursorBin(), ['--list-models'], {
             cwd,
-            env: { ...process.env, CURSOR_CONFIG_DIR: configDir },
+            // The same environment a TURN gets, not a bare spread of this
+            // process's (DROVE-387). An --account session asks this question on
+            // the account's own credential, and a stray inherited key must not
+            // answer it either.
+            env: cursorTurnEnv(configDir, cursorOwnedFromEnv()),
             timeout: 30_000,
             maxBuffer: 4 * 1024 * 1024,
         });
