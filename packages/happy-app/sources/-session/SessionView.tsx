@@ -1317,6 +1317,7 @@ export function SessionViewLoaded({
                 sessionStatusUsageLimits={session.agentState?.usageLimits ?? null}
                 sessionStatusDroverUsage={session.metadata?.droverUsage ?? null}
                 sessionStatusDroverAccount={session.metadata?.droverAccount ?? null}
+                sessionStatusFlavor={session.metadata?.flavor ?? null}
                 onSessionInfoPress={handleSessionInfoPress}
                 onActionAreaOffsetChange={usesFloatingMobileDock ? handleComposerCardOffsetChange : undefined}
             />

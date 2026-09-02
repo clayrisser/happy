@@ -383,6 +383,50 @@ export function currentDroverUsageAccount(
         ?? null;
 }
 
+/**
+ * THE SNAPSHOT NARROWED TO ONE HARNESS (DROVE-352).
+ *
+ * Clay, on a Claude session: "This particular session is a Claude session, so
+ * I'm not sure why it's showing Cursor accounts. The list of accounts for the
+ * session you're in should only show accounts that are on that computer AND
+ * are the same harness." His sheet had two Cursor blocks between the Claude
+ * ones, each drawing three dashed bars for Session, Week and Fable week —
+ * windows a cursor subscription does not have, on accounts the session could
+ * never move onto.
+ *
+ * The CLI stamps THE WHOLE REGISTRY (`usageSnapshot` maps `readAccounts()`
+ * with no harness filter), which is right for the payload and wrong for this
+ * screen: the sheet is where a session is compared against the places it could
+ * go, and a cursor account is not one of them for a Claude session.
+ *
+ * THE MACHINE HALF NEEDS NO CODE. This snapshot is session metadata, written
+ * by the CLI process hosting that session off that machine's own registry, and
+ * the sheet reads `session.metadata.droverUsage`. There is no path by which
+ * another machine's accounts reach it. Only the harness had to be asked.
+ *
+ * THE CURRENT ACCOUNT IS NEVER DROPPED. The account a session is running on is
+ * that account whatever `flavor` claims, and a mis-stamped flavor emptying the
+ * sheet would be a worse bug than the one this fixes. So the filter can only
+ * ever remove rows the session is NOT on.
+ *
+ * Absent on both sides reads as claude (`sessionHarness`, `accountHarness`),
+ * which is what makes an older snapshot degrade to exactly today's behaviour
+ * rather than to an empty sheet.
+ */
+export function droverUsageForHarness(
+    usage: DroverUsageLike,
+    harness: string,
+    droverAccount?: string | null,
+): DroverUsageLike {
+    if (!usage || !Array.isArray(usage.accounts)) return usage;
+    const current = currentDroverUsageAccount(usage, droverAccount);
+    const kept = usage.accounts.filter((a) => a === current || accountHarness(a) === harness);
+    // Identity when nothing goes, so a memo keyed on this object does not
+    // churn on every session that has one harness in its registry.
+    if (kept.length === usage.accounts.length) return usage;
+    return { ...usage, accounts: kept };
+}
+
 /** "fable" -> "Fable"; the cache's own spelling when it has one. */
 export function droverFamilyLabel(row: Pick<DroverUsageRowLike, 'scope' | 'family'>): string | null {
     if (row.scope) return row.scope;
