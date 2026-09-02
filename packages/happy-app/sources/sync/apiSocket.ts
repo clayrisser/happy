@@ -2,7 +2,11 @@ import { io, Socket } from 'socket.io-client';
 import { AppState, Platform } from 'react-native';
 import Constants from 'expo-constants';
 import { TokenStorage } from '@/auth/tokenStorage';
+import { authGetToken } from '@/auth/authGetToken';
+import { decodeBase64 } from '@/encryption/base64';
 import { Encryption } from './encryption/encryption';
+import { fetchWithReauth, reauthenticate } from './serverSwitch';
+import { getServerUrl } from './serverConfig';
 import { storage } from './storage';
 import { isDroverDemoId } from './droverDemo';
 
@@ -248,6 +252,18 @@ class ApiSocket {
     // HTTP Requests
     //
 
+    /**
+     * A request that survives a server change (DROVE-332).
+     *
+     * The bearer is signed by the server that minted it, so the moment Settings
+     * > Server points somewhere else every request here carries a token the new
+     * server has never seen. This used to be a 401 the app did nothing about,
+     * and the documented cure was "Restore with backup key" — for a server that
+     * holds the SAME account, because identity is the secret key on the device.
+     * So a 401 mints a new bearer with that key and sends the request once
+     * more; the token is read fresh on each attempt, so the retry carries the
+     * new one. `serverSwitch.ts` holds the retry rule and why it is one.
+     */
     async request(path: string, options?: RequestInit): Promise<Response> {
         if (!this.config) {
             throw new Error('SyncSocket not initialized');
@@ -259,15 +275,32 @@ class ApiSocket {
         }
 
         const url = `${this.config.endpoint}${path}`;
-        const headers = {
-            'Authorization': `Bearer ${credentials.token}`,
-            'X-Happy-Client': getHappyClientId(),
-            ...options?.headers
+        const send = async (): Promise<Response> => {
+            const fresh = await TokenStorage.getCredentials();
+            return fetch(url, {
+                ...options,
+                headers: {
+                    'Authorization': `Bearer ${fresh?.token ?? credentials.token}`,
+                    'X-Happy-Client': getHappyClientId(),
+                    ...options?.headers
+                }
+            });
         };
 
-        return fetch(url, {
-            ...options,
-            headers
+        return fetchWithReauth(send, async () => {
+            const token = await reauthenticate(getServerUrl(), {
+                authGetToken,
+                decodeSecret: (secret) => decodeBase64(secret, 'base64url'),
+                readCredentials: () => TokenStorage.getCredentials(),
+                writeCredentials: (next) => TokenStorage.setCredentials(next),
+            });
+            // The socket carries the same bearer in its handshake, so a token
+            // the REST side just replaced has to reach it too or the stream
+            // stays dead beside a working request.
+            if (token) {
+                this.updateToken(token);
+            }
+            return token;
         });
     }
 
