@@ -916,6 +916,7 @@ export const pl: TranslationStructure = {
             heartbeat: 'Puls',
             heartbeatSubtitle: 'Bije, gdy trwa praca i nic nie jest wypowiadane.',
             volume: 'Głośność',
+            vsVoice: 'Poziom sygnałów vs głos',
             workingEvery: 'Puls pracy co',
             waitingEvery: 'Puls oczekiwania co',
             titlesTitle: 'Wypowiadane tytuły',

@@ -901,6 +901,7 @@ export const ja: TranslationStructure = {
             heartbeat: '鼓動',
             heartbeatSubtitle: '作業中で何も話していない間だけ鳴ります。',
             volume: '音量',
+            vsVoice: '合図の音量（音声比）',
             workingEvery: '作業中の鼓動の間隔',
             waitingEvery: '待機中のパルスの間隔',
             titlesTitle: '読み上げるタイトル',

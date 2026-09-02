@@ -8,8 +8,11 @@
 # relative to the voice, with the voice pinned at -16 LUFS integrated. That is a
 # claim about sound, so a unit test cannot check it. This can:
 #
-#   1. Speak a sentence with `say`, which drives the same AVSpeechSynthesizer
-#      voices the reader uses, and measure it with ffmpeg loudnorm.
+#   1. Speak a sentence through the STREAMED path -- `AVSpeechSynthesizer.write`
+#      at streamTalk's rate and pitch with the voice `pickVoice` chose, which is
+#      what DroverSpeechModule actually does (render-stream-voice.swift) -- and
+#      measure it with ffmpeg loudnorm. It used to be `say`, and `say` is a
+#      different voice at a different rate; see DROVE-385.
 #   2. Render every cue from the app's own generator and measure each one.
 #   3. Compare each cue against what its table entry claims, and against the
 #      voice, and exit nonzero if anything is outside tolerance.
@@ -19,10 +22,17 @@
 # cueLoudness.ts rather than in a wav somebody re-recorded.
 #
 # The voice measured here is the BUILD MACHINE's voice, not the phone's, and
-# the two are not the same voice. The system voices on this Mac measured -16.20
-# and -18.92 LUFS, so -16 is the loud end of that band; the final word is a
-# phone with the media slider at one setting. This script is what stops the
-# arithmetic drifting between those checks.
+# the two are not the same voice. Through the streamed path this Mac measured
+# Samantha (the compact en-US voice an iPhone speaks with) at -16.16, en-GB
+# Daniel at -18.80, and the voice `pickVoice` lands on here with no enhanced
+# voice installed at -24.03. So -16 is the LOUD end of that band, which is the
+# end the reference has to sit at: a lower reference renders every cue quieter,
+# and quiet is the bug. The final word is a phone with the media slider at one
+# setting, and the trim in settings is what covers the gap between them
+# (DROVE-385). This script is what stops the arithmetic drifting in between.
+#
+# VOICE_ID=<identifier> measures a particular voice instead of the picked one,
+# which is how the band above was taken.
 #
 # Usage:
 #   sh scripts/measure-cue-loudness.sh              measure and check
@@ -65,12 +75,14 @@ integrated() {
         sed 's/.*: "//; s/".*//'
 }
 
-printf 'measuring the voice reference with say(1)\n'
-if command -v say >/dev/null 2>&1; then
-    say -o "$work/voice.aiff" "$voice_text"
-    voice_lufs=$(integrated "$work/voice.aiff")
+printf 'measuring the voice reference through the streamed path\n'
+if command -v swift >/dev/null 2>&1; then
+    VOICE_TEXT=$voice_text swift "$app_dir/scripts/render-stream-voice.swift" \
+        "$work/voice.wav" "${VOICE_LANGUAGE:-en-US}" "${VOICE_RATE:-0.52}" "${VOICE_PITCH:-1.0}" 2>&1 |
+        sed 's/^/  /'
+    voice_lufs=$(integrated "$work/voice.wav")
 else
-    printf '  say(1) is not here, so the pinned reference stands in\n'
+    printf '  swift is not here, so the pinned reference stands in\n'
     voice_lufs=$voice_target
 fi
 printf '  voice: %s LUFS (table is pinned at %s)\n\n' "$voice_lufs" "$voice_target"

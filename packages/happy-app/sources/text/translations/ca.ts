@@ -900,6 +900,7 @@ export const ca: TranslationStructure = {
             heartbeat: 'Batec',
             heartbeatSubtitle: 'Pols mentre hi ha feina en marxa i no s\'està parlant.',
             volume: 'Volum',
+            vsVoice: 'Nivell dels senyals vs veu',
             workingEvery: 'Pols de feina cada',
             waitingEvery: 'Pols d\'espera cada',
             titlesTitle: 'Títols parlats',

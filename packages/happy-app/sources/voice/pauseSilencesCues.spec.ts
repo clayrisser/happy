@@ -46,9 +46,10 @@ vi.mock('./cuePlayer', () => ({
     releaseCuePlayers: () => {},
 }));
 
-// The store the service reads the ambient state out of: `thinking` for the
-// working pulse and `agentState.requests` for the gates, which are the same
-// two the status row and the gate cards are drawn from.
+// The store the service reads the ambient state out of: `presence` and
+// `thinking` for the working pulse — through `sessionDotFacts`, the very pair
+// that colours the dot (DROVE-385) — and `agentState.requests` for the gates,
+// which is what the gate cards are drawn from.
 vi.mock('@/sync/storage', () => ({ storage: { getState: () => fake.state } }));
 
 import { audioCues } from './audioCueService';
@@ -126,7 +127,9 @@ describe('a pause silences the cues too', () => {
     let requests: Record<string, unknown> = {};
     function raiseGate(requestId: string): void {
         requests = { ...requests, [requestId]: { tool: 'AskUserQuestion', arguments: {} } };
-        fake.state.sessions = { [session]: { thinking: true, agentState: { requests } } };
+        fake.state.sessions = {
+            [session]: { presence: 'online', thinking: true, agentState: { requests } },
+        };
     }
 
     beforeEach(() => {
@@ -143,7 +146,12 @@ describe('a pause silences the cues too', () => {
         // the wrong reason.
         fake.state.settings = { audioCues: { speakTitles: false, speakGates: false } };
         requests = {};
-        fake.state.sessions = { [session]: { thinking: true } };
+        // ONLINE AND THINKING is what a working session looks like to the dot,
+        // and since DROVE-385 the heartbeat asks the dot rather than asking
+        // `thinking` itself. `presence` was missing here and the session read
+        // as disconnected, which the old predicate did not care about and the
+        // new one rightly does: a session the phone cannot reach does not pulse.
+        fake.state.sessions = { [session]: { presence: 'online', thinking: true } };
         reader = new ReadAloudReader(
             createCuedSpeechEngine(
                 {

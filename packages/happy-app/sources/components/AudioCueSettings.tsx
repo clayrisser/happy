@@ -9,6 +9,7 @@ import { Item } from '@/components/Item';
 import { ItemGroup } from '@/components/ItemGroup';
 import { useSettingMutable } from '@/sync/storage';
 import {
+    audioCueOffsetRange,
     audioCueRateRange,
     audioCueTitlesPerRunRange,
     audioCueVolumeRange,
@@ -17,7 +18,7 @@ import {
     resolveAudioCues,
     type AudioCues,
 } from '@/sync/settings';
-import { isWorkingCue, audioCues as cueTable } from '@/voice/audioCues';
+import { isWorkingCue, workingCueFor, audioCues as cueTable } from '@/voice/audioCues';
 import { audioCues as cueService } from '@/voice/audioCueService';
 import { t } from '@/text';
 
@@ -93,6 +94,7 @@ export const AudioCueSettings = React.memo(function AudioCueSettings() {
     // Slider positions while the thumb is down; the setting is written on
     // release so a drag does not push a sync per pixel.
     const [volume, setVolume] = React.useState(cues.volume);
+    const [vsVoice, setVsVoice] = React.useState(cues.volumeVsVoiceDb);
     const [workingEvery, setWorkingEvery] = React.useState(cues.workingIntervalSeconds);
     const [waitingEvery, setWaitingEvery] = React.useState(cues.waitingIntervalSeconds);
     const [perRun, setPerRun] = React.useState(cues.titlesPerRun);
@@ -101,6 +103,7 @@ export const AudioCueSettings = React.memo(function AudioCueSettings() {
 
     React.useEffect(() => {
         setVolume(cues.volume);
+        setVsVoice(cues.volumeVsVoiceDb);
         setWorkingEvery(cues.workingIntervalSeconds);
         setWaitingEvery(cues.waitingIntervalSeconds);
         setPerRun(cues.titlesPerRun);
@@ -108,6 +111,7 @@ export const AudioCueSettings = React.memo(function AudioCueSettings() {
         setAgentCap(cues.agentCuesPerMinute);
     }, [
         cues.volume,
+        cues.volumeVsVoiceDb,
         cues.workingIntervalSeconds,
         cues.waitingIntervalSeconds,
         cues.titlesPerRun,
@@ -158,6 +162,36 @@ export const AudioCueSettings = React.memo(function AudioCueSettings() {
                     step={0.05}
                     onChange={setVolume}
                     onCommit={(value) => commit({ volume: value })}
+                />
+                {/*
+                  * THE TRIM, and the one row that plays itself (DROVE-385).
+                  *
+                  * Clay: "please boost the audio more so that the beeps are
+                  * basically the same level of loudness as the voice." The
+                  * table in cueLoudness.ts is calibrated against a measured
+                  * voice, and a measurement on a build machine is not his ear
+                  * in his pocket; this is the dB either side of it, so the next
+                  * "a bit more" is a drag rather than a release.
+                  *
+                  * It previews the HEARTBEAT because the heartbeat is the sound
+                  * he named, and it previews at the level the thumb is
+                  * currently at rather than at the stored one -- `commit` runs
+                  * on release, so pressing play here is asking "what does THIS
+                  * setting sound like".
+                  */}
+                <SliderRow
+                    label={t('settingsVoice.cues.vsVoice')}
+                    value={vsVoice}
+                    display={`${vsVoice > 0 ? '+' : ''}${Math.round(vsVoice)} dB`}
+                    min={audioCueOffsetRange.min}
+                    max={audioCueOffsetRange.max}
+                    step={1}
+                    onChange={setVsVoice}
+                    onCommit={(value) => {
+                        const next = Math.round(value);
+                        commit({ volumeVsVoiceDb: next });
+                        cueService.preview(workingCueFor(0), next);
+                    }}
                 />
                 <SliderRow
                     label={t('settingsVoice.cues.workingEvery')}

@@ -36,7 +36,39 @@
  * as polish; the +-2 LU tolerance absorbs it instead.
  */
 
-/** The voice, in LUFS integrated. See the note above for how it was measured. */
+/**
+ * MEASURED THROUGH THE STREAMED PATH, NOT `say(1)` (DROVE-385).
+ *
+ * The paragraph above says the reference was measured on `say` output, "which
+ * is the same AVSpeechSynthesizer family the reader speaks with". Same family
+ * is not the same voice. `say` runs its own default voice at its own default
+ * rate; the reader builds an `AVSpeechUtterance` with `streamTalk.rate` (0.52),
+ * `streamTalk.pitch`, and the voice `pickVoice` chose -- the best-quality
+ * INSTALLED voice for the language (DroverSpeechModule.swift:412,
+ * voicePick.ts). Three different parameters and a different voice.
+ *
+ * So it is measured through that path now:
+ * `scripts/render-stream-voice.swift` renders the fixture sentence with
+ * `AVSpeechSynthesizer.write` at exactly those settings, and
+ * `scripts/measure-cue-loudness.sh` meters it. On the build machine
+ * (2026-09-02, ffmpeg loudnorm, integrated):
+ *
+ *   Samantha, the compact en-US voice an iPhone speaks with by default   -16.16
+ *   Daniel, compact en-GB                                                -18.80
+ *   Albert, what `pickVoice` lands on here with no enhanced voice installed  -24.03
+ *   `say(1)` at its own defaults, which is what DROVE-341 measured        -18.92
+ *
+ * -16 SURVIVES, and knowing why is the point of redoing it. The band is real
+ * and it is wide, so the reference has to be the LOUD end of it: a lower
+ * reference makes `cueUnityAmplitude` smaller and every cue quieter, which is
+ * the bug. -16.16 is the loudest real reading voice measured through the real
+ * path, so it is the one pinned. The number did not move; the claim behind it
+ * did, from "a voice" to "the voice he actually hears, at the top of its band".
+ *
+ * What was ACTUALLY costing the loudness was the table under it -- the
+ * heartbeat sat two dB down and the waiting pulses one -- plus there being no
+ * way for Clay to push past the table from the phone. Both are fixed below.
+ */
 export const voiceReferenceLufs = -16;
 
 /**
@@ -64,11 +96,23 @@ export const cueUnityAmplitude = 10 ** ((voiceReferenceLufs - sineFullScaleLufs)
  *     mic's three (DROVE-225) and the double press's two (DROVE-300) are the
  *     only cues that reply to something Clay just did, and a press with no
  *     audible answer is indistinguishable from a press that did nothing.
- *   - The WAITING pulses sit one dB under. They are meant to be found in a
+ *   - The WAITING pulses are at 0 as well. They are meant to be found in a
  *     pocket, which is what "roughly the same level as the voice" buys them.
- *   - WORKING is two dB under. Clay named the heartbeat specifically, so it is
- *     close to the voice; it stays the quietest of the ambient family because
- *     it repeats all day and is the one you are meant to stop noticing.
+ *   - WORKING is at 0 (DROVE-385). It was two dB under, on the argument that
+ *     the pulse repeating all day is the one you are meant to stop noticing --
+ *     which is true, and is what the CADENCE is for, not the level. Clay,
+ *     after DROVE-341 shipped: "please boost the audio more so that the beeps
+ *     are basically the same level of loudness as the voice." A 190 ms thump
+ *     at 196 Hz measures the same as a sentence long before it SOUNDS like
+ *     one, so the ambient family gets the whole of what the ceiling allows and
+ *     the trim below is what takes it back down if he wants it down.
+ *
+ * The three rows above are now one level, and that is deliberate rather than a
+ * collapse. Nothing may go over the voice, Clay asked for the heartbeat AT the
+ * voice, and the press answers were already there; a one-dB ladder between
+ * three sounds at the ceiling was never audible as an ordering anyway. What
+ * still carries an ordering is the EVENTS, and they kept their spacing exactly
+ * -- every row below moved up by the same two dB the heartbeat did.
  *   - The EVENTS fan out below that by how much they interrupt: an agent
  *     spawning or failing is news, a reply landing is a herald for the
  *     sentence right behind it, and a tool tick is meant to sit UNDER a
@@ -83,17 +127,17 @@ export const cueGainDb = {
     micRefused: 0,
     sessionSkipped: 0,
     skipRefused: 0,
-    waitingNeedsYou: -1,
-    waitingQuestion: -1,
-    waitingPermission: -1,
-    waitingExpiry: -1,
-    working: -2,
-    agentStart: -4,
-    agentFailed: -4,
-    agentDone: -5,
-    skipAhead: -6,
-    reply: -7,
-    toolCall: -10,
+    waitingNeedsYou: 0,
+    waitingQuestion: 0,
+    waitingPermission: 0,
+    waitingExpiry: 0,
+    working: 0,
+    agentStart: -2,
+    agentFailed: -2,
+    agentDone: -3,
+    skipAhead: -4,
+    reply: -5,
+    toolCall: -8,
 } as const;
 
 export type CueGainKey = keyof typeof cueGainDb;
@@ -126,8 +170,64 @@ export function amplitudeToDb(amplitude: number): number {
  * is what made every cue play at the square of its intended level and put the
  * heartbeat sixteen dB under the voice at the shipped default (DROVE-341).
  */
-export function cueAmplitudeFor(key: CueGainKey): number {
-    return cueUnityAmplitude * dbToAmplitude(cueGainDb[key]);
+export function cueAmplitudeFor(key: CueGainKey, offsetDb = 0): number {
+    return clampCueAmplitude(cueUnityAmplitude * dbToAmplitude(cueGainDb[key] + cueOffsetDb(offsetDb)));
+}
+
+/**
+ * HOW FAR CLAY MAY PUSH THE CUES, in dB either side of the table (DROVE-385).
+ *
+ * The table above is an argument about what a cue should be worth relative to
+ * a spoken sentence, and the argument can be right while the NUMBER is still
+ * wrong for one pair of ears, one phone and one pocket. That is not a thing a
+ * measurement settles, and it is a bad thing to need a release for: DROVE-341
+ * was a release, and it still came back "boost it more".
+ *
+ * So there is a trim, and it is stated in the table's own unit rather than as
+ * another percentage. +12 puts the heartbeat four times the voice's amplitude,
+ * which is past pleasant and is meant to be: the whole complaint is that the
+ * ceiling was too low. -12 is the other end, for a quiet room.
+ *
+ * ZERO IS THE DEFAULT and the default has to be right on its own. A trim that
+ * has to be moved before the app sounds correct is the table admitting it is
+ * wrong, and the table is where that gets fixed.
+ */
+export const cueOffsetRangeDb = { min: -12, max: 12 } as const;
+
+/** The trim, clamped to its range and NaN-proof. */
+export function cueOffsetDb(offsetDb: number | null | undefined): number {
+    if (typeof offsetDb !== 'number' || !Number.isFinite(offsetDb)) return 0;
+    return Math.max(cueOffsetRangeDb.min, Math.min(cueOffsetRangeDb.max, offsetDb));
+}
+
+/**
+ * The ceiling on a rendered sample, and why it is not 1.
+ *
+ * `renderCueWav` clamps to +-1 itself, so nothing here can produce a malformed
+ * file; what it cannot do is stop a clamp from turning a sine into a square,
+ * which is a different and much harsher sound arriving exactly when Clay has
+ * asked for MORE. The unity amplitude is 0.224, so +12 dB reaches 0.89 and the
+ * headroom is real; this only guards the corner where a future table row and a
+ * full trim meet.
+ */
+export const cuePeakCeiling = 0.95;
+
+/** An amplitude, held under the ceiling. */
+export function clampCueAmplitude(amplitude: number): number {
+    return Math.min(cuePeakCeiling, Math.max(0, amplitude));
+}
+
+/**
+ * A cue's table amplitude with the user's trim on it.
+ *
+ * The one place the two are combined, so "the level is applied exactly once"
+ * (DROVE-341) survives the trim existing. The trim is READ at play time from
+ * live settings and lands here; it is not a second field on the table and it
+ * is never multiplied into the player's volume as well, which is the shape of
+ * the bug DROVE-341 was.
+ */
+export function cueAmplitudeWithOffset(amplitude: number, offsetDb: number | null | undefined): number {
+    return clampCueAmplitude(amplitude * dbToAmplitude(cueOffsetDb(offsetDb)));
 }
 
 /** What a cue at this amplitude should measure, in LUFS. The script's target. */

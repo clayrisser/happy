@@ -223,6 +223,7 @@ describe('settings', () => {
                     on: true,
                     heartbeat: true,
                     volume: 1,
+                    volumeVsVoiceDb: 0,
                     workingIntervalSeconds: 6,
                     waitingIntervalSeconds: 3,
                     muted: [],
