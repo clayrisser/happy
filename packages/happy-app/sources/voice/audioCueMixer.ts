@@ -85,8 +85,16 @@ export const rateWindowMs = 60_000;
 
 export interface AudioCueMixerOptions {
     now: () => number;
-    /** Start playing a cue. Fire and forget; the mixer times it from the table. */
-    play: (id: AudioCueId, volume: number) => void;
+    /**
+     * Start playing a cue. Fire and forget; the mixer times it from the table.
+     *
+     * TWO NUMBERS, TWO JOBS (DROVE-385). `volume` is the master slider and is
+     * the player's own volume; `offsetDb` is Clay's trim against the voice and
+     * belongs to the rendered samples, because the table's ceiling IS the voice
+     * and a boost past it is a number a player's volume cannot hold. They are
+     * passed together and applied in different places, once each.
+     */
+    play: (id: AudioCueId, volume: number, offsetDb: number) => void;
     /** The live settings, read at every decision so a slider applies at once. */
     settings: () => Required<AudioCues>;
     /**
@@ -143,7 +151,7 @@ function capped(cap: number, used: number): boolean {
 
 export class AudioCueMixer {
     private readonly now: () => number;
-    private readonly playCue: (id: AudioCueId, volume: number) => void;
+    private readonly playCue: (id: AudioCueId, volume: number, offsetDb: number) => void;
     private readonly settings: () => Required<AudioCues>;
 
     private readonly speechPending: () => boolean;
@@ -371,10 +379,12 @@ export class AudioCueMixer {
     private start(id: AudioCueId, at: number): void {
         const spec = cueSpec(id);
         this.playingUntil = at + cueDurationMs(spec);
-        // The SETTING and nothing else (DROVE-341). The cue's own level is
-        // baked into the file cuePlayer renders; multiplying it in here as
-        // well is what squared it and put the heartbeat under the voice.
-        this.playCue(id, this.settings().volume);
+        // The SETTINGS and nothing else (DROVE-341, DROVE-385). The cue's own
+        // level is baked into the file cuePlayer renders, with the trim on it;
+        // multiplying either of them in here as well is what squared the gain
+        // and put the heartbeat under the voice.
+        const settings = this.settings();
+        this.playCue(id, settings.volume, settings.volumeVsVoiceDb);
     }
 
     /** Everything queued, gone. Counted, because a drop is a fact worth having. */

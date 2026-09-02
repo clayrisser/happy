@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import { ensureCueSession } from 'drover-speech';
 import { cueSpec, type AudioCueId } from './audioCues';
+import { cueAmplitudeWithOffset, cueOffsetDb } from './cueLoudness';
 import { base64Encode, renderCueWav } from './cueTone';
 
 /**
@@ -134,20 +135,50 @@ function loaded() {
 /**
  * Render one cue to the cache and hand back a player for it.
  *
- * The amplitude comes from the cue table and nowhere else, so the file on disk
- * is the same file whatever the volume setting is doing. That is what makes one
- * cache entry per cue correct, and what keeps `warmCuePlayers` and `playCue`
- * looking at the same one.
+ * The amplitude comes from the cue table and the user's TRIM against the voice
+ * (DROVE-385), and from nothing else -- in particular not from the volume
+ * slider, which is still the player's `volume` and only that. One cache entry
+ * per cue stays correct because the trim is not per cue: it moves every file at
+ * once, and `offsetInFiles` below is what drops them all when it does.
+ *
+ * The trim has to be in the SAMPLES rather than in the player, because it goes
+ * both ways and a player's volume does not: the cue table's ceiling is the
+ * voice, so a cue is rendered at 0.224 peak at most and asking the player for
+ * four times that is asking for a number over 1. The headroom is in the file.
  */
 async function build(
     native: NonNullable<ReturnType<typeof nativeModules>>,
     id: AudioCueId,
+    offsetDb: number,
 ): Promise<CuePlayerHandle> {
     const spec = cueSpec(id);
-    const wav = renderCueWav(spec, spec.amplitude);
+    const wav = renderCueWav(spec, cueAmplitudeWithOffset(spec.amplitude, offsetDb));
     const uri = `${native.cacheDir}drover-cue-${encodeURIComponent(id)}.wav`;
     await native.write(uri, base64Encode(wav));
     return native.create(uri);
+}
+
+/**
+ * The trim the cached files were rendered at.
+ *
+ * Null until the first render. A cue's file is only right for one trim, so a
+ * different one invalidates the whole cache at once -- which is the honest
+ * behaviour and also the cheap one, because Clay moves this slider a handful
+ * of times in the life of the app and never while a burst is draining.
+ *
+ * Deliberately NOT part of the cache key. DROVE-341's two smaller bugs were
+ * both a key that carried a level: `warmCuePlayers` keyed on one number and
+ * `playCue` on another, so half the cues were warmed under a name nothing
+ * played. Keeping the key `id` alone means those two cannot drift again, and
+ * the trim is handled by dropping everything instead.
+ */
+let offsetInFiles: number | null = null;
+
+/** Drop the cache when the trim moves, so nothing plays at the old level. */
+function reconcileOffset(offsetDb: number): void {
+    if (offsetInFiles === offsetDb) return;
+    if (offsetInFiles !== null) releaseCuePlayers();
+    offsetInFiles = offsetDb;
 }
 
 /**
@@ -155,11 +186,13 @@ async function build(
  * times the sound from the table rather than waiting on the device, so a
  * player that never answers cannot wedge the queue.
  */
-export function playCue(id: AudioCueId, volume: number): void {
+export function playCue(id: AudioCueId, volume: number, offsetDb = 0): void {
     const level = Math.max(0, Math.min(1, volume));
     if (level <= 0) return;
     const native = loaded();
     if (native === null) return;
+    const trim = cueOffsetDb(offsetDb);
+    reconcileOffset(trim);
     // The voice's category, or nothing at all on a binary without the native
     // function — which is every build before this one, and where the cue plays
     // exactly where it played before (DROVE-341).
@@ -184,7 +217,7 @@ export function playCue(id: AudioCueId, volume: number): void {
     players.set(id, { handle: null, loading: true });
     void (async () => {
         try {
-            const handle = await build(native, id);
+            const handle = await build(native, id, trim);
             handle.volume = level;
             players.set(id, { handle, loading: false });
             handle.play();
@@ -205,17 +238,19 @@ export function playCue(id: AudioCueId, volume: number): void {
  * kind of small wrongness that makes a sound untrustworthy, so the work is
  * done when reading starts rather than when the first pulse is due.
  */
-export function warmCuePlayers(ids: readonly AudioCueId[], volume: number): void {
+export function warmCuePlayers(ids: readonly AudioCueId[], volume: number, offsetDb = 0): void {
     const level = Math.max(0, Math.min(1, volume));
     if (level <= 0) return;
     const native = loaded();
     if (native === null) return;
+    const trim = cueOffsetDb(offsetDb);
+    reconcileOffset(trim);
     for (const id of ids) {
         if (players.has(id)) continue;
         players.set(id, { handle: null, loading: true });
         void (async () => {
             try {
-                const handle = await build(native, id);
+                const handle = await build(native, id, trim);
                 handle.volume = level;
                 players.set(id, { handle, loading: false });
             } catch {
@@ -227,6 +262,7 @@ export function warmCuePlayers(ids: readonly AudioCueId[], volume: number): void
 
 /** Drop every cached player. Used when the cue system is switched off. */
 export function releaseCuePlayers(): void {
+    offsetInFiles = null;
     for (const entry of players.values()) {
         try {
             entry.handle?.remove?.();

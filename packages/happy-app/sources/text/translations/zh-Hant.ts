@@ -900,6 +900,7 @@ export const zhHant: TranslationStructure = {
             heartbeat: '心跳',
             heartbeatSubtitle: '在有工作進行且沒有朗讀時跳動。',
             volume: '音量',
+            vsVoice: '提示音相對語音音量',
             workingEvery: '工作心跳間隔',
             waitingEvery: '等待脈衝間隔',
             titlesTitle: '朗讀標題',

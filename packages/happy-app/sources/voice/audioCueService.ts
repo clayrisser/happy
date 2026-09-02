@@ -1,8 +1,10 @@
 import { storage } from '@/sync/storage';
 import { resolveAudioCues } from '@/sync/settings';
 import { gatesForSession } from '@/sync/droverGates';
+import { sessionDotFacts, sessionDotState } from '@/components/sessionDot';
 import { isLiveStatusFresh, summarizeLiveStatus } from '@/utils/liveStatus';
 import type { LiveStatus } from '@/utils/liveStatus';
+import type { Session } from '@/sync/storageTypes';
 import type { Message } from '@/sync/typesMessage';
 import { AudioCueMixer } from './audioCueMixer';
 import { playCue, releaseCuePlayers, warmCuePlayers } from './cuePlayer';
@@ -24,11 +26,12 @@ import { audioCues as cueTable, workingCueFor, type AudioCueId } from './audioCu
  * DROVE-146 is the live proof of how quietly a reader stops speaking.
  *
  * The ambient state is READ, not pushed. Every tick it asks storage the same
- * two questions the screen asks — is this session working (the status row's
- * own `liveStatus` freshness, plus `thinking` for the window before the CLI
- * has published anything) and what is pending on it (`gatesForSession`, the
- * list the gate cards and the wrist already draw) — so the sound and the
- * screen cannot disagree. There is no second notion of busy anywhere.
+ * two questions the screen asks — is this session working (`sessionDotFacts`
+ * plus `statusDotState`, the exact pair that decides the colour of the dot
+ * beside it, DROVE-385) and what is pending on it (`gatesForSession`, the list
+ * the gate cards and the wrist already draw) — so the sound and the screen
+ * cannot disagree. There is no second notion of busy anywhere, and there was
+ * one until DROVE-385 took it out: see `isWorking`.
  */
 
 /** How often the mixer is asked to decide while reading. Under the shortest cue. */
@@ -75,7 +78,7 @@ function settings() {
 class AudioCueService {
     private readonly mixer = new AudioCueMixer({
         now: () => Date.now(),
-        play: (id, volume) => playCue(id, volume),
+        play: (id, volume, offsetDb) => playCue(id, volume, offsetDb),
         settings,
         // THE rule (DROVE-174): a cue may only sound in a genuine gap, and a
         // gap between two sentences is not one. The reader is the only thing
@@ -141,6 +144,11 @@ class AudioCueService {
         this.armedAt = 0;
         this.mixer.reset();
         releaseCuePlayers();
+        // The players are gone, so the next start has to build them again.
+        // Without this the warm ran once in the life of the process and every
+        // later start played its first beat late — the exact lateness
+        // `warmCuePlayers` exists to delete (DROVE-385, found by its spec).
+        this.wasReading = false;
     }
 
     /** A sentence is at the synthesiser, or is not. Speech always wins. */
@@ -156,10 +164,16 @@ class AudioCueService {
      * vocabulary, so a muted cue still demonstrates itself and the tenth press
      * in a minute is not silently dropped by a cap meant for a fan-out.
      */
-    preview(id: AudioCueId): void {
+    preview(id: AudioCueId, offsetDb?: number): void {
         const resolved = settings();
         try {
-            playCue(id, resolved.volume);
+            // `offsetDb` is the trim slider asking to be heard at the level the
+            // THUMB is at (DROVE-385), which is not yet the stored one: the
+            // settings screen commits on release, so a preview off storage
+            // would demonstrate the setting he just left rather than the one
+            // he is choosing. Every other row passes nothing and gets the
+            // stored trim, which is what they are previewing against.
+            playCue(id, resolved.volume, offsetDb ?? resolved.volumeVsVoiceDb);
         } catch {
             // A device that cannot make the sound simply does not.
         }
@@ -186,7 +200,7 @@ class AudioCueService {
             const resolved = settings();
             if (!resolved.on) return;
             if (resolved.muted.includes(id)) return;
-            playCue(id, resolved.volume);
+            playCue(id, resolved.volume, resolved.volumeVsVoiceDb);
         } catch {
             // A device that cannot make the sound simply does not, and the
             // mic press goes ahead regardless: a missing beep is bad, a
@@ -291,6 +305,7 @@ class AudioCueService {
                         ...Array.from({ length: 13 }, (_, i) => workingCueFor(i)),
                     ],
                     settings().volume,
+                    settings().volumeVsVoiceDb,
                 );
             }
             // A queued burst drains on the fast clock and the ambient state
@@ -320,14 +335,55 @@ class AudioCueService {
      */
     private readState(sessionId: string, at: number) {
         const sessions = storage.getState().sessions ?? {};
-        const session = sessions[sessionId] as
-            | { thinking?: boolean; metadata?: { liveStatus?: unknown } | null }
-            | undefined;
-        const live = session?.metadata?.liveStatus as LiveStatus | null | undefined;
+        const session = sessions[sessionId] as Session | undefined;
+        const live = (session?.metadata?.liveStatus ?? null) as LiveStatus | null;
         const fresh = isLiveStatusFresh(live as never, at);
-        const working = session?.thinking === true || fresh;
         const pendingKinds = gatesForSession(sessions as never, sessionId).map((entry) => entry.gate.kind);
-        return { reading: true, working, pendingKinds, agents: this.agentCount(live, fresh, at) };
+        return {
+            reading: true,
+            working: this.isWorking(session, at),
+            pendingKinds,
+            agents: this.agentCount(live, fresh, at),
+        };
+    }
+
+    /**
+     * Is this session WORKING? The dot's answer, never a second one (DROVE-385).
+     *
+     * Clay: "when it's still doing work but there's no subagents, shouldn't it
+     * still pulse? The audio should still pulse so I have an audio cue that
+     * it's working."
+     *
+     * It used to be `session.thinking === true || isLiveStatusFresh(...)`, and
+     * that is a SECOND notion of busy sitting next to the one the screen draws
+     * -- the thing the header of this file swears does not exist here. It is
+     * both too narrow and too wide at once: `thinking` is a connection state
+     * that goes false at the response headers, and a fresh snapshot is not the
+     * same claim as a running turn. Meanwhile the dot beside it had already
+     * learnt three things this had not (DROVE-244, DROVE-257, DROVE-361): the
+     * main thread mid-turn off `liveStatusMain`, a compaction the CLI named
+     * outright, and a background agent that outlived the turn that launched it.
+     *
+     * So the question is asked once, in `sessionDotFacts` + `statusDotState`,
+     * and the sound follows the dot by construction. Blue or purple pulses;
+     * everything else does not.
+     *
+     * WAITING IS NOT HANDLED HERE and must not be. `ambientCueFor` already
+     * prefers a pending gate over the heartbeat, and a gate is what "waiting on
+     * Clay" means -- the same list the gate cards and the wrist draw. Reading
+     * the dot's own amber here as well would give a session two reasons to pick
+     * a pulse and a way for them to disagree.
+     */
+    private isWorking(session: Session | undefined, at: number): boolean {
+        if (!session) return false;
+        try {
+            const dot = sessionDotState(sessionDotFacts(session, at), at);
+            return dot === 'working' || dot === 'compacting';
+        } catch {
+            // A session shape nobody expected is a session that does not pulse,
+            // which is the quiet failure rather than the loud one.
+            return false;
+        }
     }
 
     /**

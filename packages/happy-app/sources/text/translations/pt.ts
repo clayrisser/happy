@@ -899,6 +899,7 @@ export const pt: TranslationStructure = {
             heartbeat: 'Batimento',
             heartbeatSubtitle: 'Pulso enquanto há trabalho a decorrer e nada está a ser falado.',
             volume: 'Volume',
+            vsVoice: 'Nível dos sinais vs voz',
             workingEvery: 'Pulso de trabalho a cada',
             waitingEvery: 'Pulso de espera a cada',
             titlesTitle: 'Títulos falados',

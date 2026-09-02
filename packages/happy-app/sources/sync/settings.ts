@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import { AgentDefaultOverridesSchema } from './agentDefaults';
 import { DEFAULT_USER_MESSAGE_BUBBLE_COLOR } from '../utils/userMessageBubbleColor';
+import { cueOffsetRangeDb } from '../voice/cueLoudness';
 
 //
 // Settings Schema
@@ -130,6 +131,8 @@ export const AudioCuesSchema = z.object({
     on: z.boolean().optional(),
     heartbeat: z.boolean().optional(),
     volume: z.number().optional(),
+    /** The trim against the voice, in dB (DROVE-385). See audioCueOffsetRange. */
+    volumeVsVoiceDb: z.number().optional(),
     workingIntervalSeconds: z.number().optional(),
     waitingIntervalSeconds: z.number().optional(),
     muted: z.array(z.string()).optional(),
@@ -157,6 +160,25 @@ export type AudioCues = z.infer<typeof AudioCuesSchema>;
  * samples AND into the player's volume, so the level came out squared.
  */
 export const audioCueVolumeRange = { min: 0, max: 1 } as const;
+/**
+ * CUE LEVEL AGAINST THE VOICE, in dB (DROVE-385).
+ *
+ * `volume` above is the master: 0 is off and 1 is the table's own level, and
+ * it is the control that answers "how loud are the sounds". This one answers a
+ * different question -- "how loud are they COMPARED TO the voice" -- which is
+ * the only question Clay has actually asked twice, and it is the one the table
+ * in sources/voice/cueLoudness.ts is written in.
+ *
+ * Two controls rather than one because they fail differently. The table is a
+ * calibration and it can be wrong for a room, a pair of headphones or a pocket
+ * in a way no measurement on a build machine settles; `volume` cannot express
+ * "one dB more than a spoken sentence" at all, since it is a fraction of the
+ * table rather than a shift of it, and it can never go ABOVE it.
+ *
+ * The range is the one in cueLoudness.ts, re-exported here so a settings
+ * screen does not import the audio layer to draw a slider.
+ */
+export const audioCueOffsetRange = cueOffsetRangeDb;
 /**
  * How often the ordinary WORKING pulse repeats. The floor is two seconds
  * because anything faster stops being ambient and starts being an alarm; the
@@ -195,6 +217,10 @@ export const audioCuesDefaults: Required<AudioCues> = {
     // A default that means "the same level as the voice" is the only one that
     // answers the complaint out of the box.
     volume: 1,
+    // No trim (DROVE-385). The table is calibrated against the voice, so the
+    // default has to be right with the slider untouched; this is the dial for
+    // the ear the table cannot measure, not a level the app needs set.
+    volumeVsVoiceDb: 0,
     workingIntervalSeconds: 6,
     waitingIntervalSeconds: 3,
     muted: [],
@@ -624,6 +650,7 @@ export function resolveAudioCues(settings: Pick<Settings, 'audioCues'>): Require
         on: raw.on ?? audioCuesDefaults.on,
         heartbeat: raw.heartbeat ?? audioCuesDefaults.heartbeat,
         volume: clamp(raw.volume, audioCuesDefaults.volume, audioCueVolumeRange),
+        volumeVsVoiceDb: clamp(raw.volumeVsVoiceDb, audioCuesDefaults.volumeVsVoiceDb, audioCueOffsetRange),
         workingIntervalSeconds: clamp(
             raw.workingIntervalSeconds,
             audioCuesDefaults.workingIntervalSeconds,

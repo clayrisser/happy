@@ -37,9 +37,19 @@ describe('the cue table', () => {
         // failure the ticket exists to prevent. They are the loudest rows in
         // the table, and by a margin over the tool tick that is meant to sit
         // under a sentence.
+        //
+        // AT the waiting pulse rather than over it since DROVE-385, and the
+        // assertion moved rather than went away. Clay asked for the ambient
+        // family to sit AT the voice, which is where the press answers already
+        // were and is the ceiling nothing may pass, so the three top rows are
+        // one level now -- an ordering that could only ever have been expressed
+        // by making a press answer louder than the voice, which is the opposite
+        // bug. What still has to hold is that no press answer is ever QUIETER
+        // than an ambient pulse, and the margin over the tool tick is untouched.
         const mic: AudioCueId[] = ['micOpen', 'micClosed', 'micRefused'];
         for (const id of mic) {
-            expect(cueSpec(id).amplitude, id).toBeGreaterThan(cueSpec('waitingNeedsYou').amplitude);
+            expect(cueSpec(id).amplitude, id).toBeGreaterThanOrEqual(cueSpec('waitingNeedsYou').amplitude);
+            expect(cueSpec(id).amplitude, id).toBeGreaterThanOrEqual(cueSpec('working').amplitude);
             expect(cueSpec(id).amplitude, id).toBeGreaterThan(cueSpec('toolCall').amplitude);
         }
     });

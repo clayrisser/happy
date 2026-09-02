@@ -901,6 +901,7 @@ export const zhHans: TranslationStructure = {
             heartbeat: '心跳',
             heartbeatSubtitle: '在有工作进行且没有朗读时跳动。',
             volume: '音量',
+            vsVoice: '提示音相对语音音量',
             workingEvery: '工作心跳间隔',
             waitingEvery: '等待脉冲间隔',
             titlesTitle: '朗读标题',
