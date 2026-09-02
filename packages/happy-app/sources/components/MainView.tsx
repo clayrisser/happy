@@ -458,6 +458,17 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
                 ) : undefined}
                 headerLeft={() => <HeaderLogo />}
                 headerLeftGlass={Platform.OS !== 'web'}
+                // The trailing pill answers a press with the platform's own
+                // swell, the way the composer's + disc does (DROVE-356). Every
+                // tab that draws one puts real controls in it: the sessions
+                // filter and gear, the inbox add-friend, the settings server
+                // button. The LEADING slot deliberately gets no such prop —
+                // it is the drover mark, this phone reaches its inbox through
+                // the tab bar, and the mark opens nothing. Clay circled it
+                // beside the pill, so it is worth saying rather than leaving
+                // as an omission: a decoration that swells under a finger is a
+                // button that does nothing.
+                headerRightInteractive={Platform.OS !== 'web'}
                 headerBackdropAlwaysVisible={Platform.OS !== 'web'}
                 headerBackdropVariant="home"
                 headerShadowVisible={false}

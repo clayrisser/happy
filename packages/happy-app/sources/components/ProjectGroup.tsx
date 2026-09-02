@@ -1,5 +1,5 @@
 import React from 'react';
-import { Platform, Pressable, View } from 'react-native';
+import { Platform, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -14,12 +14,13 @@ import { useNewSessionDraft } from '@/hooks/useNewSessionDraft';
 import { formatPathRelativeToHome } from '@/utils/sessionUtils';
 import { compactCount, visibleRigGitLineChanges } from '@/utils/rigGitLineChanges';
 import { getRepoPath, isWorktreePath } from '@/utils/worktreePaths';
+import { GlassChromeButton } from './GlassChromeControl';
 
 // Tall enough to span the name and branch lines together.
 const HEADER_AVATAR_SIZE = 30;
 // Roughly 70% of the composer attachment "+": same feel, less presence in a
 // list header. hitSlop keeps the touch target comfortable.
-const ADD_BUTTON_SIZE = 30;
+export const ADD_BUTTON_SIZE = 30;
 const ADD_ICON_SIZE = 18;
 
 interface ProjectGroupProps {
@@ -135,15 +136,28 @@ const WorkspaceSection = React.memo(({ project, workspace, selectedSessionId }: 
                         )}
                     </View>
                 </View>
-                <Pressable
+                {/* The same glass button the composer's + is (DROVE-356),
+                    at this row's smaller size. Clay circled it beside the
+                    header pill: it was a filled `View` wrapped in a
+                    `Pressable` that faded to 0.5, which is the hand-rolled
+                    press DROVE-169 spent three springs removing. Its fill is
+                    spent as `UIGlassEffect.tintColor`, so the disc is the
+                    colour it was and UIKit draws the swell. It asks for no
+                    rim, because the flat fallback never had a hairline and a
+                    list row is not floating chrome; the hitSlop is unchanged and
+                    now sits on the Pressable INSIDE the surface, so what is
+                    drawn and what answers a touch are one rectangle. */}
+                <GlassChromeButton
                     onPress={handleNewSession}
                     hitSlop={12}
                     accessibilityRole="button"
                     accessibilityLabel={t('sidebar.newSession')}
-                    style={({ pressed }) => [styles.addButton, pressed && styles.addButtonPressed]}
+                    size={ADD_BUTTON_SIZE}
+                    tintColor={theme.colors.surfaceHighest}
+                    rim={false}
                 >
                     <Ionicons name="add" size={ADD_ICON_SIZE} color={theme.colors.text} />
-                </Pressable>
+                </GlassChromeButton>
             </View>
 
             <View style={styles.workspaceCard}>
@@ -225,19 +239,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         fontSize: 11,
         fontWeight: '600',
         color: theme.colors.gitRemovedText,
-    },
-    // Filled like the composer's resting send button so it reads as a control,
-    // not an ornament.
-    addButton: {
-        width: ADD_BUTTON_SIZE,
-        height: ADD_BUTTON_SIZE,
-        borderRadius: ADD_BUTTON_SIZE / 2,
-        backgroundColor: theme.colors.surfaceHighest,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    addButtonPressed: {
-        opacity: 0.5,
     },
     workspaceCard: {
         backgroundColor: theme.colors.surface,
