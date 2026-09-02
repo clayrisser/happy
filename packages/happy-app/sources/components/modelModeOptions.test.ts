@@ -516,6 +516,38 @@ describe('harnesses with no mode controls', () => {
         expect(getAvailableModels('cursor', null, translate)).toEqual([]);
     });
 
+    // DROVE-395. The capsule draws only what the session publishes, and a
+    // cursor session started from the phone published nothing: `--list-models`
+    // exits 1 on a locked login keychain and the runner swallowed it. The CLI
+    // now publishes the rows it knows are true when the list fails, marked,
+    // and never a tier scale with them. That is enough for the label and the
+    // sheet; it must not be enough for the dial.
+    it('a cursor session on the fallback rows names its model, and has no effort dial '
+        + 'until a real tier scale is published', () => {
+        const marked = 'cursor-agent could not list models';
+        const fallback = {
+            models: [
+                { code: 'auto', value: 'Auto', description: marked },
+                { code: 'claude-opus-5-thinking', value: 'claude-opus-5-thinking', description: marked },
+            ],
+        } as never;
+        const models = getAvailableModels('cursor', fallback, translate, 'claude-opus-5-thinking');
+        expect(models.map((m) => m.key)).toEqual(['auto', 'claude-opus-5-thinking']);
+        expect(models.map((m) => m.description)).toEqual([marked, marked]);
+        expect(resolveCurrentOption(models, ['claude-opus-5-thinking', 'auto'])?.name).toBe('claude-opus-5-thinking');
+        expect(resolveCurrentOption(models, [undefined, 'auto'])?.name).toBe('Auto');
+        expect(getEffortLevelsForModel('cursor', 'claude-opus-5-thinking', fallback)).toEqual([]);
+        expect(getEffortLevelsForPicker('cursor', 'claude-opus-5-thinking', fallback)).toEqual([]);
+        expect(getHighestReachableEffortKey('cursor', 'claude-opus-5-thinking', fallback)).toBeNull();
+
+        const listed = {
+            ...(fallback as object),
+            thoughtLevels: [{ code: 'high', value: 'High' }, { code: 'xhigh', value: 'Extra High' }],
+        } as never;
+        expect(getEffortLevelsForModel('cursor', 'claude-opus-5-thinking', listed).map((l) => l.key))
+            .toEqual(['high', 'xhigh']);
+    });
+
     it('still lets a harness that publishes its own catalog win', () => {
         const metadata = {
             operatingModes: [{ code: 'ask', value: 'Ask' }],

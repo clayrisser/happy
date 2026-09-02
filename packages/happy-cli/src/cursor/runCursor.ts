@@ -58,13 +58,8 @@ import { MessageQueue2 } from '@/utils/MessageQueue2';
 import { CursorBackend } from './CursorBackend';
 import { readCursorSeed } from './cursorSeed';
 import { prepareSessionCursorConfigDir } from './cursorConfig';
-import {
-    listCursorModels,
-    buildCursorModelCatalog,
-    resolveCursorModelId,
-    splitCursorModelId,
-    type CursorModelCatalog,
-} from './cursorModels';
+import { splitCursorModelId } from './cursorModels';
+import { CursorModelPublisher } from './cursorModelPublisher';
 import {
     cursorPermissionCatalog,
     cursorPermissionModes,
@@ -188,26 +183,6 @@ export async function runCursor(opts: RunCursorOptions): Promise<void> {
         join(configuration.happyHomeDir, 'cursor-sessions', sessionTag),
     );
 
-    // The pickers come from the CLI, not from a table in the app, so they
-    // cannot drift from what `--model` accepts. Published after the session
-    // exists because the call costs a round trip and a session that appears a
-    // second later is worse than a picker that fills a second later.
-    //
-    // The flat list is folded into families plus an effort axis first: sixty
-    // near-duplicate ids is not a picker, and the tier in the id is the only
-    // effort control cursor-agent actually honours (cursorModels.ts).
-    let catalog: CursorModelCatalog | null = null;
-    void listCursorModels(configDir, process.cwd()).then((flat) => {
-        if (flat.length === 0) return;
-        catalog = buildCursorModelCatalog(flat);
-        const built = catalog;
-        session.updateMetadata((current) => ({
-            ...current,
-            models: built.models,
-            ...(built.efforts.length > 0 ? { thoughtLevels: built.efforts } : {}),
-        }));
-    });
-
     let usageTally: CursorUsageTally = emptyCursorUsageTally;
 
     const backend = new CursorBackend({
@@ -262,6 +237,24 @@ export async function runCursor(opts: RunCursorOptions): Promise<void> {
         },
     });
 
+    // The pickers come from the CLI, not from a table in the app, so they
+    // cannot drift from what `--model` accepts. Asked through the backend so
+    // the question runs under exactly the environment a turn does, and after
+    // the session exists because the call costs a round trip. The flat list
+    // is folded into families plus an effort axis: sixty near-duplicate ids is
+    // not a picker, and the tier in the id is the only effort control
+    // cursor-agent honours (cursorModels.ts). What is published when
+    // cursor-agent will not answer, and when it is asked again, is
+    // cursorModelPublisher.ts (DROVE-395).
+    const models = new CursorModelPublisher({
+        list: () => backend.listModels(),
+        publish: (patch) => session.updateMetadata((current) => ({ ...current, ...patch })),
+        startedModel: opts.model ?? null,
+        log: (msg) => logger.debug(`[cursor] ${msg}`),
+        warn: (msg) => logger.warn(`[cursor] ${msg}`),
+    });
+    void models.start();
+
     const sessionManager = new AcpSessionManager();
     const messageQueue = new MessageQueue2<Record<string, never>>(() => '');
     let shouldExit = false;
@@ -302,11 +295,11 @@ export async function runCursor(opts: RunCursorOptions): Promise<void> {
         } | null;
         // Model and effort are one string to cursor-agent, so a change to
         // either has to be resolved against the whole catalog. Before the
-        // catalog arrives the pick is passed through untouched, which is the
-        // old behaviour and still correct for a full id.
+        // real list lands that is the fallback catalog, which knows the
+        // started id, so the family the session began on round-trips to it.
         const family = next?.modelMode ?? null;
         const effort = next?.effortLevel ?? null;
-        backend.setModel(catalog ? resolveCursorModelId(catalog, family, effort) : family);
+        backend.setModel(models.resolve(family, effort));
 
         const mode = next?.permissionMode ?? null;
         backend.setPermissionMode(mode);
@@ -400,6 +393,9 @@ export async function runCursor(opts: RunCursorOptions): Promise<void> {
                     harness: 'cursor',
                 }));
                 sendEnvelopes(sessionManager.endTurn('completed'));
+                // A turn that ran proves the credential works, which is what
+                // a list that failed at start was missing.
+                void models.afterTurn();
             } catch (error) {
                 const detail = error instanceof Error ? error.message : String(error);
                 logger.debug(`[cursor] turn failed: ${detail}`);
