@@ -10,6 +10,7 @@ import { micOutcome } from '@/voice/micButton';
 import {
     RECORDING_BANNER_FRAME,
     RECORDING_BANNER_HEIGHT,
+    RECORDING_WAVE_HEIGHT,
 } from './composerStripLayout';
 
 /**
@@ -161,7 +162,7 @@ export const LiveMicBanner = React.memo(({
             </View>
             <Text style={styles.elapsed} numberOfLines={1}>{formatElapsed(talk.since, now)}</Text>
             <View style={styles.wave}>
-                <MicWaveform active={talk.active} color="#FFFFFF" height={12} />
+                <MicWaveform active={talk.active} color="#FFFFFF" height={RECORDING_WAVE_HEIGHT} />
             </View>
             {/* The slot is always there so nothing shifts when the glyph
                 appears half a second into a press. */}
