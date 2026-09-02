@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     mcpDivergenceSummary,
     mcpForbiddenKeys,
+    mcpHealthLeaks,
     mcpReportLeaks,
     mcpServerAllowedKeys,
     providerAllowedKeys,
@@ -248,5 +249,69 @@ describe('what the per-account header says', () => {
             scopes: [scope('default', [server('a')]), scope('corrupt', [], { error: 'unparseable' })],
         });
         expect(mcpDivergenceSummary(h)).toBe('corrupt could not be read');
+    });
+});
+
+// --- one server, acted on (DROVE-291) ----------------------------------------
+
+describe('mcpHealthLeaks', () => {
+    const health = (over: Record<string, unknown> = {}) => ({
+        harness: 'claude',
+        server: 'billing',
+        transport: 'http',
+        enabled: true,
+        state: 'failing',
+        says: 'Refused to connect when the machine last asked',
+        observedAt: 1_700_000_000_000,
+        probed: true,
+        lastSeen: 1_700_000_000_000,
+        lastError: { at: 1_700_000_000_000, text: 'Connection failed (ConnectionRefused)' },
+        observedFrom: 'session log',
+        reconnect: { available: true, says: 'Starts the server out of band' },
+        reauth: { available: true, verb: 'claude mcp login', says: 'Opens the sign-in in tmux' },
+        ...over,
+    });
+
+    it('passes a health answer that carries only what somebody decided on', () => {
+        expect(mcpHealthLeaks(health())).toEqual([]);
+    });
+
+    it('refuses a key that can carry a credential, even one nobody declared', () => {
+        const problems = mcpHealthLeaks(health({ token: 'anything' }));
+        expect(problems.some((p) => p.includes('token'))).toBe(true);
+    });
+
+    it('refuses a field nobody decided on, because an extra key is the failure', () => {
+        // The allowlist is the check. A producer that grew a field has to be
+        // noticed here rather than after the payload is posted.
+        const problems = mcpHealthLeaks(health({ commandLine: 'uv run notes.py --api-key hunter2' }));
+        expect(problems.some((p) => p.includes('commandLine'))).toBe(true);
+    });
+
+    it('refuses a logged error that still has a url in it', () => {
+        // The scrubbing happens on the machine, where the original is. This is
+        // the check that it happened — a scrubber that stopped working must
+        // fail loudly rather than quietly ship an internal hostname.
+        const problems = mcpHealthLeaks(health({
+            lastError: { at: 1, text: 'could not reach https://api.internal.example/mcp' },
+        }));
+        expect(problems).toContain('lastError.text still contains a url');
+    });
+
+    it('refuses a logged error that still has an absolute path in it', () => {
+        const problems = mcpHealthLeaks(health({
+            lastError: { at: 1, text: 'spawning /Users/someone/bin/thing failed' },
+        }));
+        expect(problems).toContain('lastError.text still contains an absolute path');
+    });
+
+    it('accepts the markers the machine leaves behind, which are not the thing they replaced', () => {
+        expect(mcpHealthLeaks(health({
+            lastError: { at: 1, text: 'ConnectionRefused reaching [url] from [path] with GH_TOKEN=[redacted]' },
+        }))).toEqual([]);
+    });
+
+    it('says so plainly when handed something that is not a health answer', () => {
+        expect(mcpHealthLeaks(null)).toEqual(['the health answer is not an object']);
     });
 });

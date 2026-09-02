@@ -122,6 +122,7 @@ import { harnessName } from '@/utils/harnessName';
 import { accountHarness } from '@/utils/droverAccounts';
 import { DroverAccountLoginBody } from '@/components/tools/views/DroverAccountLoginBody';
 import { MachineMcpRows } from '@/components/MachineMcpRows';
+import { McpServerSheet } from '@/components/McpServerSheet';
 import { machineDroverMcps, type MachineMcpsResult } from '@/sync/machineMcps';
 import { mcpOnlyFooter } from '@/sync/mcpText';
 
@@ -479,6 +480,21 @@ export default function AccountsScreen() {
                             onEditProviders={mh.harness === 'opencode'
                                 ? () => router.push(`/settings/opencode-providers?machineId=${machine.id}`)
                                 : undefined}
+                            /* Tapping one server opens its sheet (DROVE-291):
+                               health, reconnect, re-authenticate. A SHEET and
+                               not a route, because it is one server's three
+                               facts and coming back to the list you were
+                               reading is the whole interaction — a push would
+                               lose the forty rows you had just unfolded. */
+                            onPressServer={(server) => Modal.show({
+                                component: McpServerSheet,
+                                props: {
+                                    machineId: machine.id,
+                                    harness: mh.harness,
+                                    harnessLabel: mh.label,
+                                    server,
+                                },
+                            } as any)}
                         />
                     );
                     // One row, used by every harness section, so a machine that

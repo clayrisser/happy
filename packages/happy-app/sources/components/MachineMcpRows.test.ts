@@ -453,3 +453,60 @@ describe('the freshness line', () => {
         }
     });
 });
+
+// --- the row is the thing you press now (DROVE-291) --------------------------
+//
+// DROVE-274 said in this component's own header that there was nothing to press
+// except the disclosure. Clay overruled it holding the shipped list: "Shouldn't
+// I be able to click on these and reconnect authenticate etc…". These are the
+// two halves of that: the press reaches the caller with the right server, and a
+// caller with nowhere to send you still gets the read it had.
+
+describe('tapping one server', () => {
+    it('hands the caller the server that was pressed, not its name', () => {
+        // The whole summary, because the sheet needs the transport to decide
+        // whether re-authenticate is even a thing for this server.
+        const pressed: unknown[] = [];
+        const tree = render({ harness: harness(), expanded: true, onPressServer: (s: unknown) => pressed.push(s) });
+        const row = items(tree).find((p) => p.title === 'huly');
+        expect(row).toBeTruthy();
+        (row!.onPress as () => void)();
+        expect(pressed).toEqual([{ name: 'huly', transport: 'stdio', enabled: true }]);
+    });
+
+    it('draws a chevron on a row that opens something', () => {
+        const tree = render({ harness: harness(), expanded: true, onPressServer: () => {} });
+        const row = items(tree).find((p) => p.title === 'pdf');
+        expect(row!.showChevron).toBe(true);
+    });
+
+    it('offers no press and no chevron when the screen has nowhere to send you', () => {
+        // A row that looks tappable and is not is worse than one that never
+        // offered, and this component still has to render as the DROVE-274 read
+        // for any caller that has no sheet.
+        const tree = render({ harness: harness(), expanded: true });
+        const row = items(tree).find((p) => p.title === 'pdf');
+        expect(row!.onPress).toBeUndefined();
+        expect(row!.showChevron).toBe(false);
+    });
+
+    it('leaves the dot meaning enabled, not health', () => {
+        // Health costs a probe per server. Forty of them on a screen open would
+        // be a minute of connections nobody asked for, so the list keeps the
+        // fact it already has and the health is one tap down.
+        const tree = render({
+            harness: harness({ scopes: [scope('default', [server('muted', 'stdio', false), server('live')])] }),
+            expanded: true,
+            onPressServer: () => {},
+        });
+        const rows = items(tree);
+        expect(iconName(rows.find((p) => p.title === 'live')!)).toBe('ellipse');
+        expect(iconName(rows.find((p) => p.title === 'muted')!)).toBe('ellipse-outline');
+        expect(rows.find((p) => p.title === 'muted')!.subtitle).toBe('Disabled on this machine');
+    });
+
+    it('keeps the servers behind the disclosure, so nothing is pressable while it is shut', () => {
+        const tree = render({ harness: harness(), expanded: false, onPressServer: () => {} });
+        expect(titles(tree)).not.toContain('huly');
+    });
+});

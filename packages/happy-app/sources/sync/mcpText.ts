@@ -8,7 +8,7 @@
  * a module, and now they do not.
  */
 
-import type { McpReport, ProviderReport } from '@slopus/happy-wire';
+import type { McpHealthState, McpReport, ProviderReport } from '@slopus/happy-wire';
 
 /**
  * A harness's section, in the order the machine listed them.
@@ -150,4 +150,55 @@ export function mcpReadAgo(readAt: number, now: number = Date.now()): string {
     if (hours < 24) return `Read ${hours} hour${hours === 1 ? '' : 's'} ago`;
     const days = Math.round(hours / 24);
     return `Read ${days} day${days === 1 ? '' : 's'} ago`;
+}
+
+// --- one server, acted on (DROVE-291) ----------------------------------------
+//
+// The same rule as everything above: the copy is decided in one place, so the
+// sheet and any future surface cannot disagree about what a state means. And
+// the DROVE-346 rule — ONE FRAGMENT. A sheet that explains itself in paragraphs
+// is a sheet nobody finishes reading.
+
+/**
+ * `Seen just now` / `Seen 3 minutes ago`.
+ *
+ * Its own function rather than mcpReadAgo's wording, because these are two
+ * different facts and reading them in the same words is how they get confused:
+ * `Read` is when the machine looked at a config FILE, `Seen` is when it last
+ * got an answer from a running SERVER.
+ */
+export function mcpObservedAgo(observedAt: number, now: number = Date.now()): string {
+    const seconds = Math.max(0, Math.round((now - observedAt) / 1000));
+    if (seconds < 45) return 'Seen just now';
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 60) return `Seen ${minutes} minute${minutes === 1 ? '' : 's'} ago`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 24) return `Seen ${hours} hour${hours === 1 ? '' : 's'} ago`;
+    const days = Math.round(hours / 24);
+    return `Seen ${days} day${days === 1 ? '' : 's'} ago`;
+}
+
+/** The one word at the top of the sheet. */
+export function mcpHealthTitle(state: McpHealthState): string {
+    switch (state) {
+        case 'connected': return 'Connected';
+        case 'failing': return 'Not connecting';
+        case 'needs-auth': return 'Needs sign-in';
+        default: return 'Not known';
+    }
+}
+
+/**
+ * `ok` / `warn` / `unknown` — which of the screen's three colours a state gets.
+ * Named rather than returning a hex, so the component keeps its palette and
+ * this file keeps the judgement.
+ *
+ * `unknown` is its own tone and NOT a warning. Codex has no verb that opens a
+ * connection, so every Codex server is permanently unknown; painting forty rows
+ * amber would teach Clay to ignore amber.
+ */
+export function mcpHealthTone(state: McpHealthState): 'ok' | 'warn' | 'unknown' {
+    if (state === 'connected') return 'ok';
+    if (state === 'unknown') return 'unknown';
+    return 'warn';
 }

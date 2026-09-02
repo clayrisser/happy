@@ -18,6 +18,7 @@ import { registerDroverPolicyHandler } from '@/drover/flip/policyRpc';
 import { registerListWorktreesHandler } from '@/daemon/listWorktrees';
 import { registerMachineAccountsHandlers } from '@/drover/machineAccounts';
 import { registerMachineMcpsHandlers } from '@/drover/machineMcps';
+import { registerMachineMcpHealthHandlers } from '@/drover/machineMcpHealth';
 import { registerMachineFilesHandlers } from '@/drover/machineFiles';
 import { registerMachineProvidersHandlers } from '@/drover/machineProviders';
 import { registerMachinePluginsHandlers } from '@/drover/machinePlugins';
@@ -172,6 +173,14 @@ export class ApiMachineClient {
         // MCP config belongs to the machine, and Claude's is per ACCOUNT, so
         // it sits beside the accounts handler that already answers for those.
         registerMachineMcpsHandlers(this.rpcHandlerManager);
+        // And the per-SERVER half of that view (DROVE-291): what one server's
+        // health looks like, a reconnect, and the harness's own sign-in opened
+        // in a tmux window Clay can watch. Beside the list because it is the
+        // same noun -- and separate from it because the list is a config read
+        // and these run things. Nothing here carries a credential: a re-auth
+        // answers with the NAME of a tmux window and the OAuth dance never
+        // leaves the Mac.
+        registerMachineMcpHealthHandlers(this.rpcHandlerManager);
         // A worktree's files and a session's pane, for the worktree sheet's
         // Files and Terminal tabs (DROVE-330). On the daemon for the fourth
         // time and the same reason: the worktree Clay tapped may have no
